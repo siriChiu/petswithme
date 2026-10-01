@@ -1,0 +1,852 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"sort"
+)
+
+// AnimationManifest describes animation timing and source pixels only. Images
+// remain shared, read-only Atlas values; every cat owns a separate player.
+// Schema 1 supports the legacy atlas and optional pixel rectangles in that image.
+// A fallback is an honest reuse of artwork, not a claim of additional drawings.
+type AnimationManifest struct {
+	SchemaVersion int                        `json:"schemaVersion"`
+	Fallback      string                     `json:"fallback"`
+	Anchor        AnimationAnchor            `json:"anchor"`
+	Actions       map[string]AnimationAction `json:"actions"`
+}
+type AnimationAnchor struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+type FrameRect struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+	W int `json:"w"`
+	H int `json:"h"`
+}
+type AnimationFrame struct {
+	Row        int              `json:"row,omitempty"`
+	Col        int              `json:"col,omitempty"`
+	Rect       *FrameRect       `json:"rect,omitempty"`
+	Anchor     *AnimationAnchor `json:"anchor,omitempty"`
+	DurationMS int              `json:"durationMs"`
+}
+type AnimationClip struct {
+	Start []AnimationFrame `json:"start,omitempty"`
+	Loop  []AnimationFrame `json:"loop,omitempty"`
+	End   []AnimationFrame `json:"end,omitempty"`
+}
+type AnimationAction struct {
+	AnimationClip
+	Fallback     string                   `json:"fallback,omitempty"`
+	Moods        map[string]AnimationClip `json:"moods,omitempty"`
+	DemoFallback bool                     `json:"demoFallback,omitempty"`
+}
+
+func LoadAnimationManifest(r io.Reader, imageWidth, imageHeight int) (*AnimationManifest, error) {
+	data, err := io.ReadAll(io.LimitReader(r, 1024*1024+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 1024*1024 {
+		return nil, errors.New("animation manifest exceeds 1 MB")
+	}
+	var m AnimationManifest
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.DisallowUnknownFields()
+	if err = d.Decode(&m); err != nil {
+		return nil, err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return nil, errors.New("animation manifest must contain one JSON object")
+	}
+	if err = m.Validate(imageWidth, imageHeight); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func (m *AnimationManifest) Validate(imageWidth, imageHeight int) error {
+	if m == nil || m.SchemaVersion != 1 {
+		return errors.New("animation manifest needs schemaVersion 1")
+	}
+	if len(m.Actions) == 0 || len(m.Actions) > 128 {
+		return errors.New("animation manifest needs 1 to 128 actions")
+	}
+	if !finite(m.Anchor.X) || !finite(m.Anchor.Y) || m.Anchor.X < 0 || m.Anchor.X > 1 || m.Anchor.Y < 0 || m.Anchor.Y > 1 {
+		return errors.New("animation anchor must be normalized between 0 and 1")
+	}
+	if _, ok := m.Actions[m.Fallback]; !ok {
+		return errors.New("animation manifest fallback action is missing")
+	}
+	validateClip := func(action string, clip AnimationClip) error {
+		if len(clip.Start)+len(clip.Loop)+len(clip.End) > 4096 {
+			return fmt.Errorf("action %q has too many frames", action)
+		}
+		for _, seq := range [][]AnimationFrame{clip.Start, clip.Loop, clip.End} {
+			for _, f := range seq {
+				if f.Anchor != nil && (!finite(f.Anchor.X) || !finite(f.Anchor.Y) || f.Anchor.X < 0 || f.Anchor.X > 1 || f.Anchor.Y < 0 || f.Anchor.Y > 1) {
+					return fmt.Errorf("action %q has an invalid frame anchor", action)
+				}
+				if f.DurationMS < 10 || f.DurationMS > 60000 {
+					return fmt.Errorf("action %q durationMs must be 10 to 60000", action)
+				}
+				if f.Rect != nil {
+					q := f.Rect
+					if q.X < 0 || q.Y < 0 || q.W <= 0 || q.H <= 0 || q.W > imageWidth || q.H > imageHeight || q.X > imageWidth-q.W || q.Y > imageHeight-q.H {
+						return fmt.Errorf("action %q rectangle is outside its image", action)
+					}
+				} else if imageWidth < 8 || imageHeight < 11 || imageWidth%8 != 0 || imageHeight%11 != 0 || f.Row < 0 || f.Row >= len(rowFrames) || f.Col < 0 || f.Col >= rowFrames[f.Row] {
+					return fmt.Errorf("action %q references a missing legacy atlas frame", action)
+				}
+			}
+		}
+		return nil
+	}
+	for name, a := range m.Actions {
+		if name == "" || len(name) > 64 {
+			return errors.New("action names must be 1 to 64 bytes")
+		}
+		if err := validateClip(name, a.AnimationClip); err != nil {
+			return err
+		}
+		if a.Fallback == "" && len(a.Loop) == 0 {
+			return fmt.Errorf("action %q needs loop frames or a fallback", name)
+		}
+		for mood, clip := range a.Moods {
+			if mood == "" || len(clip.Loop) == 0 {
+				return fmt.Errorf("action %q mood needs a name and loop frames", name)
+			}
+			if err := validateClip(name+"/"+mood, clip); err != nil {
+				return err
+			}
+		}
+		seen := map[string]bool{}
+		key := name
+		for {
+			if seen[key] {
+				return fmt.Errorf("action %q has a fallback cycle", name)
+			}
+			seen[key] = true
+			current, ok := m.Actions[key]
+			if !ok {
+				return fmt.Errorf("action %q has unknown fallback %q", name, key)
+			}
+			if current.Fallback == "" {
+				break
+			}
+			key = current.Fallback
+		}
+	}
+	return nil
+}
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+// Resolve selects mood-specific artwork, then action fallbacks, then the global
+// fallback. Unknown behavior names therefore remain drawable.
+func (m *AnimationManifest) Resolve(action, mood string) AnimationClip {
+	if m == nil {
+		return AnimationClip{Loop: []AnimationFrame{{DurationMS: 250}}}
+	}
+	seen := map[string]bool{}
+	var start, end []AnimationFrame
+	finish := func(c AnimationClip) AnimationClip {
+		if start != nil {
+			c.Start = start
+		}
+		if end != nil {
+			c.End = end
+		}
+		return c
+	}
+	for tries := 0; tries <= len(m.Actions)+1; tries++ {
+		if seen[action] {
+			break
+		}
+		seen[action] = true
+		a, ok := m.Actions[action]
+		if !ok {
+			action = m.Fallback
+			continue
+		}
+		if c, ok := a.Moods[mood]; ok && len(c.Loop) > 0 {
+			return finish(c)
+		}
+		if len(a.Loop) > 0 {
+			return finish(a.AnimationClip)
+		}
+		// An alias may supply its own entry/exit while reusing a fallback loop.
+		// The first (most specific) entry and exit always win.
+		if start == nil && len(a.Start) > 0 {
+			start = a.Start
+		}
+		if end == nil && len(a.End) > 0 {
+			end = a.End
+		}
+		if a.Fallback != "" {
+			action = a.Fallback
+		} else {
+			action = m.Fallback
+		}
+	}
+	return finish(AnimationClip{Loop: []AnimationFrame{{DurationMS: 250}}})
+}
+func atlasLoop(row, ms int) AnimationClip {
+	c := AnimationClip{}
+	for col := 0; col < rowFrames[row]; col++ {
+		c.Loop = append(c.Loop, AnimationFrame{Row: row, Col: col, DurationMS: ms})
+	}
+	return c
+}
+func DefaultAnimationManifest() *AnimationManifest {
+	m := &AnimationManifest{SchemaVersion: 1, Fallback: "idle", Anchor: AnimationAnchor{.5, 1}, Actions: map[string]AnimationAction{}}
+	m.Actions["idle"] = AnimationAction{AnimationClip: atlasLoop(0, 250)}
+	m.Actions["walk_right"] = AnimationAction{AnimationClip: atlasLoop(1, 100)}
+	m.Actions["walk_left"] = AnimationAction{AnimationClip: atlasLoop(2, 100)}
+	m.Actions["pet"] = AnimationAction{AnimationClip: atlasLoop(3, 200)}
+	m.Actions["drag"] = AnimationAction{AnimationClip: AnimationClip{Loop: []AnimationFrame{{Row: 3, Col: 1, DurationMS: 250}}}, DemoFallback: true}
+	m.Actions["sleep"] = AnimationAction{AnimationClip: AnimationClip{Loop: []AnimationFrame{{Row: 0, Col: 3, DurationMS: 1000}}}, DemoFallback: true}
+	for _, a := range []string{"sit", "rest", "social_rest", "groom", "stretch"} {
+		m.Actions[a] = AnimationAction{Fallback: "idle", DemoFallback: true}
+	}
+	m.Actions["greet"] = AnimationAction{Fallback: "pet", DemoFallback: true}
+	play := atlasLoop(4, 140)
+	play.Start = append([]AnimationFrame(nil), play.Loop[:1]...)
+	play.End = append([]AnimationFrame(nil), play.Loop[len(play.Loop)-1:]...)
+	m.Actions["play"] = AnimationAction{AnimationClip: play}
+	m.Actions["curious"] = AnimationAction{AnimationClip: atlasLoop(8, 260)}
+	m.Actions["waiting"] = AnimationAction{AnimationClip: atlasLoop(6, 220)}
+	for direction := 0; direction < 16; direction++ {
+		m.Actions[fmt.Sprintf("gaze_%d", direction)] = AnimationAction{AnimationClip: AnimationClip{Loop: []AnimationFrame{{Row: 9 + direction/8, Col: direction % 8, DurationMS: 200}}}}
+	}
+	return m
+}
+
+type AnimationPhase string
+
+const (
+	AnimationStart AnimationPhase = "start"
+	AnimationLoop  AnimationPhase = "loop"
+	AnimationEnd   AnimationPhase = "end"
+	AnimationDone  AnimationPhase = "done"
+)
+
+// AnimationPlayer is never shared between cats. Generation changes on every
+// replacement, so callers can reject delayed completion work after an interrupt.
+type AnimationPlayer struct {
+	Manifest     *AnimationManifest
+	Action, Mood string
+	Phase        AnimationPhase
+	Index        int
+	ElapsedMS    float64
+	Generation   uint64
+	clip         AnimationClip
+	doneReported bool
+}
+
+func NewAnimationPlayer(m *AnimationManifest) *AnimationPlayer {
+	p := &AnimationPlayer{Manifest: m}
+	p.Play("idle", "calm")
+	return p
+}
+func (p *AnimationPlayer) Play(action, mood string) uint64 {
+	p.Action = action
+	p.Mood = mood
+	p.clip = p.Manifest.Resolve(action, mood)
+	p.Index = 0
+	p.ElapsedMS = 0
+	p.Generation++
+	p.doneReported = false
+	p.Phase = AnimationStart
+	if len(p.clip.Start) == 0 {
+		p.Phase = AnimationLoop
+	}
+	return p.Generation
+}
+func (p *AnimationPlayer) Set(action, mood string) {
+	if action != p.Action || mood != p.Mood || p.Phase == AnimationDone {
+		p.Play(action, mood)
+	}
+}
+func (p *AnimationPlayer) Stop() {
+	if p.Phase == AnimationEnd || p.Phase == AnimationDone {
+		return
+	}
+	p.Phase = AnimationEnd
+	p.Index = 0
+	p.ElapsedMS = 0
+	if len(p.clip.End) == 0 {
+		p.Phase = AnimationDone
+	}
+}
+func (p *AnimationPlayer) sequence() []AnimationFrame {
+	switch p.Phase {
+	case AnimationStart:
+		return p.clip.Start
+	case AnimationEnd, AnimationDone:
+		if len(p.clip.End) > 0 {
+			return p.clip.End
+		}
+		return p.clip.Loop
+	default:
+		return p.clip.Loop
+	}
+}
+func (p *AnimationPlayer) Frame() AnimationFrame {
+	seq := p.sequence()
+	if len(seq) == 0 {
+		return AnimationFrame{DurationMS: 250}
+	}
+	return seq[min(p.Index, len(seq)-1)]
+}
+
+// Tick advances real durations, skips whole loop cycles in O(frame count), and
+// reports completion exactly once. It never calls back into behavior state.
+func (p *AnimationPlayer) Tick(dt float64) (AnimationFrame, bool) {
+	if !finite(dt) || dt < 0 {
+		dt = 0
+	}
+	p.ElapsedMS += dt * 1000
+	for p.Phase != AnimationDone {
+		seq := p.sequence()
+		if len(seq) == 0 {
+			p.Phase = AnimationDone
+			break
+		}
+		if p.Phase == AnimationLoop {
+			total := 0
+			for _, f := range seq {
+				total += max(10, f.DurationMS)
+			}
+			if p.ElapsedMS >= float64(total) {
+				p.ElapsedMS = math.Mod(p.ElapsedMS, float64(total))
+			}
+		}
+		duration := float64(max(10, seq[p.Index].DurationMS))
+		if p.ElapsedMS < duration {
+			break
+		}
+		p.ElapsedMS -= duration
+		p.Index++
+		if p.Index < len(seq) {
+			continue
+		}
+		p.Index = 0
+		switch p.Phase {
+		case AnimationStart:
+			p.Phase = AnimationLoop
+		case AnimationEnd:
+			p.Phase = AnimationDone
+			p.Index = max(0, len(p.clip.End)-1)
+		}
+	}
+	completed := p.Phase == AnimationDone && !p.doneReported
+	if completed {
+		p.doneReported = true
+		p.ElapsedMS = 0
+	}
+	return p.Frame(), completed
+}
+
+type BehaviorPriority int
+
+const (
+	PriorityIdle BehaviorPriority = iota
+	PriorityWander
+	PrioritySocial
+	PriorityPlay
+	PriorityPet
+	PriorityDrag
+)
+
+type BehaviorFrame struct {
+	AnimationFrame
+	Action     string
+	Mood       string
+	Anchor     AnimationAnchor
+	Generation uint64
+}
+type CatBehavior struct {
+	Action, Mood                   string
+	Priority                       BehaviorPriority
+	Until, NextDecision, GazeUntil float64
+	Player                         *AnimationPlayer
+	WasDragging                    bool
+	Ending                         bool
+}
+type BehaviorEngine struct {
+	Cats     []*Cat
+	States   []*CatBehavior
+	Manifest *AnimationManifest
+	Social   *SocialCoordinator
+}
+
+func NewBehaviorEngine(cats []*Cat, m *AnimationManifest) *BehaviorEngine {
+	if m == nil {
+		m = DefaultAnimationManifest()
+	}
+	e := &BehaviorEngine{Cats: cats, Manifest: m, Social: NewSocialCoordinator()}
+	for i := range cats {
+		e.States = append(e.States, &CatBehavior{Action: "idle", Mood: "calm", Priority: PriorityIdle, NextDecision: 8 + float64(i)*3, Player: NewAnimationPlayer(m)})
+		e.States[i].Player.Tick(float64(i) * .17)
+	}
+	return e
+}
+func (e *BehaviorEngine) valid(i int) bool { return i >= 0 && i < len(e.Cats) && e.Cats[i] != nil }
+
+// SetManifest gives one cat independently supplied artwork and resets only that
+// cat's animation cursor. The caller must validate the manifest when loading it.
+func (e *BehaviorEngine) SetManifest(i int, m *AnimationManifest) bool {
+	if !e.valid(i) || m == nil {
+		return false
+	}
+	s := e.States[i]
+	s.Player.Manifest = m
+	s.Player.Play(s.Action, s.Mood)
+	s.Ending = false
+	return true
+}
+func (e *BehaviorEngine) Cancel(i int, now float64) {
+	if !e.valid(i) {
+		return
+	}
+	e.Social.Cancel(i, now)
+	s := e.States[i]
+	s.Action = "idle"
+	s.Priority = PriorityIdle
+	s.Until = 0
+	s.Ending = false
+	s.NextDecision = now + 8
+	s.Player.Play("idle", s.Mood)
+}
+func (e *BehaviorEngine) Pet(i int, now float64) {
+	if !e.valid(i) {
+		return
+	}
+	if !e.Request(i, "pet", PriorityPet, now, 2) {
+		return
+	}
+	e.Cats[i].Pet(now)
+	e.States[i].GazeUntil = now + 4
+	e.States[i].Mood = "happy"
+}
+func (e *BehaviorEngine) Play(i int, now float64) {
+	if e.Request(i, "play", PriorityPlay, now, 5) {
+		e.States[i].Mood = "playful"
+	}
+}
+
+// Request respects current live priorities. Dragging cannot be interrupted by a
+// click or a menu command. Equal priority restarts deliberate repeated actions.
+func (e *BehaviorEngine) Request(i int, action string, priority BehaviorPriority, now, duration float64) bool {
+	if !e.valid(i) || e.Cats[i].Dragging || !finite(now) || !finite(duration) || duration <= 0 {
+		return false
+	}
+	s := e.States[i]
+	if s.WasDragging {
+		e.Cancel(i, now)
+		s.WasDragging = false
+	}
+	if (now < s.Until || s.Ending) && priority < s.Priority {
+		return false
+	}
+	e.Social.Cancel(i, now)
+	s.Action = action
+	s.Priority = priority
+	s.Until = now + duration
+	s.Ending = false
+	// A fresh release-click can arrive before the next timer sees Dragging=false.
+	// It replaces the drag instead of being mistaken for stale pre-drag work.
+	s.WasDragging = false
+	s.NextDecision = s.Until + 8
+	s.Player.Play(action, s.Mood)
+	return true
+}
+func (e *BehaviorEngine) SetMood(i int, mood string) {
+	if e.valid(i) && mood != "" {
+		e.States[i].Mood = mood
+	}
+}
+func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, quiet bool) []BehaviorFrame {
+	if !finite(now) {
+		now = 0
+	}
+	if !finite(dt) || dt < 0 {
+		dt = 0
+	}
+	dt = math.Min(dt, .25)
+	blocked := make([]bool, len(e.Cats))
+	for i, c := range e.Cats {
+		if c == nil {
+			blocked[i] = true
+			continue
+		}
+		s := e.States[i]
+		if c.Dragging {
+			if !s.WasDragging {
+				e.Cancel(i, now)
+			}
+			s.WasDragging = true
+			s.Action = "drag"
+			s.Priority = PriorityDrag
+			s.Until = now + dt + 1
+		} else if s.WasDragging {
+			s.WasDragging = false
+			e.Cancel(i, now)
+			s.Mood = "calm"
+		}
+		if s.Priority >= PriorityPlay && now >= s.Until && !c.Dragging {
+			if !s.Ending {
+				s.Player.Stop()
+				s.Ending = true
+			}
+			if s.Player.Phase == AnimationDone {
+				s.Priority = PriorityIdle
+				s.Action = "idle"
+				s.Until = 0
+				s.Ending = false
+				s.Mood = "calm"
+			}
+		}
+		blocked[i] = c.Dragging || (s.Priority >= PriorityPlay && (now < s.Until || s.Ending))
+	}
+	intents := e.Social.Tick(e.Cats, blocked, now, dt, quiet || idleSeconds >= 180)
+	out := make([]BehaviorFrame, len(e.Cats))
+	for i, c := range e.Cats {
+		if c == nil {
+			continue
+		}
+		s := e.States[i]
+		action := s.Action
+		switch {
+		case c.Dragging:
+			action = "drag"
+		case blocked[i]:
+			action = s.Action
+		case quiet || idleSeconds >= 180:
+			s.Action = "sleep"
+			s.Priority = PriorityIdle
+			s.NextDecision = now + 5
+			s.Mood = "sleepy"
+			action = "sleep"
+		default:
+			if intent, ok := intents[i]; ok {
+				s.Action = intent.Action
+				s.Priority = PrioritySocial
+				s.Until = now + .5
+				action = intent.Action
+				if intent.Move {
+					direction := intent.TargetX - c.X
+					if direction < 0 {
+						action = "walk_left"
+					} else {
+						action = "walk_right"
+					}
+					e.moveToward(i, intent.TargetX, intent.TargetY, float64(c.W)*.30*dt)
+				}
+			} else {
+				if s.Priority == PrioritySocial || s.Action == "sleep" {
+					s.Priority = PriorityIdle
+					s.Action = "idle"
+					s.NextDecision = now + 5
+					s.Mood = "calm"
+				}
+				if s.Priority == PriorityWander {
+					if now >= s.Until {
+						s.Priority = PriorityIdle
+						s.Action = "idle"
+						s.NextDecision = now + 10 + c.Seed.Float64()*15
+					} else {
+						action = "walk_right"
+						if c.Direction < 0 {
+							action = "walk_left"
+						}
+						oldX := c.X
+						e.moveToward(i, c.X+c.Direction*100, c.Y, float64(c.W)*.23*dt)
+						if math.Abs(c.X-oldX) < .01 {
+							c.Direction *= -1
+						}
+					}
+				}
+				if s.Priority == PriorityIdle && now >= s.NextDecision {
+					choice := c.Seed.Intn(6)
+					s.Until = now + 3 + c.Seed.Float64()*3
+					s.NextDecision = s.Until + 10 + c.Seed.Float64()*12
+					switch choice {
+					case 0, 1:
+						s.Priority = PriorityWander
+						s.Action = "walk_right"
+						c.Direction = 1
+						if c.Seed.Intn(2) == 0 {
+							c.Direction = -1
+							s.Action = "walk_left"
+						}
+					case 2:
+						s.Action = "curious"
+					case 3:
+						s.Action = "waiting"
+					case 4:
+						s.Action = "sit"
+					default:
+						s.Action = "rest"
+					}
+				}
+				if s.Priority == PriorityIdle && s.Until > 0 && now >= s.Until {
+					s.Action = "idle"
+					s.Until = 0
+				}
+				action = s.Action
+				if s.Priority == PriorityWander {
+					if c.Direction < 0 {
+						action = "walk_left"
+					} else {
+						action = "walk_right"
+					}
+				}
+				dx, dy := cursorX-(c.X+float64(c.W)/2), cursorY-(c.Y+float64(c.H)/2)
+				if s.Priority <= PriorityWander && (dx*dx+dy*dy < 420*420 || now < s.GazeUntil) && math.Abs(dx)+math.Abs(dy) > 15 {
+					s.Action = "idle"
+					s.Priority = PriorityIdle
+					s.NextDecision = math.Max(s.NextDecision, now+4)
+					action = "idle"
+					action = fmt.Sprintf("gaze_%d", GazeDirection(dx, dy))
+				}
+			}
+		}
+		c.Mode = action
+		if !s.Ending {
+			s.Player.Set(action, s.Mood)
+		}
+		frame, _ := s.Player.Tick(dt)
+		anchor := s.Player.Manifest.Anchor
+		if frame.Anchor != nil {
+			anchor = *frame.Anchor
+		}
+		out[i] = BehaviorFrame{AnimationFrame: frame, Action: action, Mood: s.Mood, Anchor: anchor, Generation: s.Player.Generation}
+	}
+	return out
+}
+
+// moveToward clamps the path before a neighbor, including when a long timer tick
+// would otherwise step through it. Cats on other monitors are never obstacles.
+func (e *BehaviorEngine) moveToward(i int, x, y, speed float64) {
+	c := e.Cats[i]
+	dx, dy := x-c.X, y-c.Y
+	distance := math.Hypot(dx, dy)
+	if distance == 0 || speed <= 0 {
+		return
+	}
+	scale := math.Min(1, speed/distance)
+	nx, ny := ClampPosition(c.X+dx*scale, c.Y+dy*scale, c.W, c.H, c.Bounds)
+	gap := math.Max(6, float64(c.W)*.06)
+	for j, o := range e.Cats {
+		if i == j || o == nil || o.Bounds != c.Bounds {
+			continue
+		}
+		if ny+float64(c.H) <= o.Y || ny >= o.Y+float64(o.H) {
+			continue
+		}
+		if c.X < o.X+float64(o.W) && c.X+float64(c.W) > o.X {
+			// Dragging can deliberately leave two windows overlapping. Autonomous
+			// motion may separate them, but must not cross through the neighbor.
+			center := c.X + float64(c.W)/2
+			otherCenter := o.X + float64(o.W)/2
+			if (nx > c.X && center <= otherCenter) || (nx < c.X && center >= otherCenter) {
+				nx = c.X
+			}
+		}
+		if nx > c.X && c.X+float64(c.W) <= o.X+gap {
+			nx = math.Min(nx, o.X-float64(c.W)-gap)
+			nx = math.Max(nx, c.X)
+		}
+		if nx < c.X && c.X >= o.X+float64(o.W)-gap {
+			nx = math.Max(nx, o.X+float64(o.W)+gap)
+			nx = math.Min(nx, c.X)
+		}
+		// Vertical movement is not part of autonomous behavior. Reject a diagonal
+		// step that enters an occupied window rather than allowing corner tunneling.
+		if ny != c.Y && nx < o.X+float64(o.W) && nx+float64(c.W) > o.X && ny < o.Y+float64(o.H) && ny+float64(c.H) > o.Y {
+			ny = c.Y
+		}
+	}
+	c.X, c.Y = ClampPosition(nx, ny, c.W, c.H, c.Bounds)
+}
+
+type SocialIntent struct {
+	Action           string
+	TargetX, TargetY float64
+	Move             bool
+}
+type SocialPlan struct {
+	ID                               uint64
+	A, B, Leader                     int
+	Phase                            string
+	Started, PhaseUntil, Destination float64
+	Bounds                           Rect
+}
+type SocialCoordinator struct {
+	Plans        map[uint64]*SocialPlan
+	Reservations map[int]uint64
+	Cooldown     map[int]float64
+	NextAttempt  float64
+	generation   uint64
+}
+
+func NewSocialCoordinator() *SocialCoordinator {
+	return &SocialCoordinator{Plans: map[uint64]*SocialPlan{}, Reservations: map[int]uint64{}, Cooldown: map[int]float64{}, NextAttempt: 15}
+}
+func (s *SocialCoordinator) Cancel(index int, now float64) {
+	id, ok := s.Reservations[index]
+	if !ok {
+		return
+	}
+	p := s.Plans[id]
+	if p == nil {
+		delete(s.Reservations, index)
+		return
+	}
+	delete(s.Plans, id)
+	delete(s.Reservations, p.A)
+	delete(s.Reservations, p.B)
+	s.Cooldown[p.A] = now + 35
+	s.Cooldown[p.B] = now + 35
+}
+func (s *SocialCoordinator) Start(cats []*Cat, a, b int, now float64) bool {
+	if a == b || a < 0 || b < 0 || a >= len(cats) || b >= len(cats) || cats[a] == nil || cats[b] == nil {
+		return false
+	}
+	ca, cb := cats[a], cats[b]
+	_, ar := s.Reservations[a]
+	_, br := s.Reservations[b]
+	if ar || br || ca.Dragging || cb.Dragging || now < s.Cooldown[a] || now < s.Cooldown[b] || ca.Bounds != cb.Bounds {
+		return false
+	}
+	if math.Abs((ca.Y+float64(ca.H))-(cb.Y+float64(cb.H))) > float64(min(ca.H, cb.H))*.4 {
+		return false
+	}
+	if math.Abs(ca.X-cb.X) > math.Max(520, float64(max(ca.W, cb.W))*4) {
+		return false
+	}
+	if ca.Bounds.Width() < ca.W+cb.W+int(socialGap(ca, cb)) {
+		return false
+	}
+	if ca.X > cb.X {
+		a, b = b, a
+		ca, cb = cb, ca
+	}
+	s.generation++
+	p := &SocialPlan{ID: s.generation, A: a, B: b, Leader: b, Phase: "approach", Started: now, PhaseUntil: now + 10, Bounds: ca.Bounds}
+	s.Plans[p.ID] = p
+	s.Reservations[a] = p.ID
+	s.Reservations[b] = p.ID
+	return true
+}
+func socialGap(a, b *Cat) float64 { return math.Max(10, float64(max(a.W, b.W))*.12) }
+func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, quiet bool) map[int]SocialIntent {
+	intents := map[int]SocialIntent{}
+	isBlocked := func(i int) bool {
+		return i < 0 || i >= len(cats) || cats[i] == nil || cats[i].Dragging || (i < len(blocked) && blocked[i])
+	}
+	ids := make([]uint64, 0, len(s.Plans))
+	for id := range s.Plans {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		p := s.Plans[id]
+		if p == nil {
+			continue
+		}
+		if quiet || isBlocked(p.A) || isBlocked(p.B) || cats[p.A].Bounds != p.Bounds || cats[p.B].Bounds != p.Bounds {
+			s.Cancel(p.A, now)
+			continue
+		}
+		a, b := cats[p.A], cats[p.B]
+		gap := socialGap(a, b)
+		floor := math.Min(a.Y+float64(a.H), b.Y+float64(b.H))
+		distance := b.X - (a.X + float64(a.W))
+		switch p.Phase {
+		case "approach":
+			if distance >= gap-2 && distance <= gap+5 {
+				p.Phase = "greet"
+				p.PhaseUntil = now + 2.4
+			} else if now >= p.PhaseUntil {
+				s.Cancel(p.A, now)
+				continue
+			} else {
+				center := (a.X + float64(a.W) + b.X) / 2
+				ax := clamp(center-gap/2-float64(a.W), float64(a.Bounds.Left), float64(a.Bounds.Right-a.W-b.W)-gap)
+				bx := ax + float64(a.W) + gap
+				intents[p.A] = SocialIntent{"approach", ax, floor - float64(a.H), true}
+				intents[p.B] = SocialIntent{"approach", bx, floor - float64(b.H), true}
+				continue
+			}
+		case "greet":
+			if now >= p.PhaseUntil {
+				p.Phase = "follow"
+				p.PhaseUntil = now + 4
+				right := float64(b.Bounds.Right-b.W) - b.X
+				left := a.X - float64(a.Bounds.Left)
+				if left > right {
+					p.Leader = p.A
+					p.Destination = math.Max(float64(a.Bounds.Left), a.X-float64(a.W)*.8)
+				} else {
+					p.Leader = p.B
+					p.Destination = math.Min(float64(b.Bounds.Right-b.W), b.X+float64(b.W)*.8)
+				}
+			}
+		case "follow":
+			if now >= p.PhaseUntil {
+				p.Phase = "rest"
+				p.PhaseUntil = now + 5
+			}
+		case "rest":
+			if now >= p.PhaseUntil {
+				s.Cancel(p.A, now)
+				continue
+			}
+		}
+		switch p.Phase {
+		case "greet":
+			intents[p.A] = SocialIntent{Action: "greet"}
+			intents[p.B] = SocialIntent{Action: "greet"}
+		case "follow":
+			if p.Leader == p.B {
+				intents[p.B] = SocialIntent{"follow", p.Destination, b.Y, true}
+				intents[p.A] = SocialIntent{"follow", b.X - float64(a.W) - gap, a.Y, true}
+			} else {
+				intents[p.A] = SocialIntent{"follow", p.Destination, a.Y, true}
+				intents[p.B] = SocialIntent{"follow", a.X + float64(a.W) + gap, b.Y, true}
+			}
+		case "rest":
+			intents[p.A] = SocialIntent{Action: "social_rest"}
+			intents[p.B] = SocialIntent{Action: "social_rest"}
+		}
+	}
+	if quiet {
+		s.NextAttempt = now + 15
+		return intents
+	}
+	if now >= s.NextAttempt {
+		s.NextAttempt = now + 12
+		started := false
+		for a := 0; a < len(cats) && !started; a++ {
+			if isBlocked(a) {
+				continue
+			}
+			for b := a + 1; b < len(cats); b++ {
+				if !isBlocked(b) && s.Start(cats, a, b, now) {
+					started = true
+					break
+				}
+			}
+		}
+	}
+	return intents
+}

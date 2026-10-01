@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "cats": [
+    {"name":"Demo cat 1","sprite":"","demo":true},
+    {"name":"Demo cat 2","sprite":"","demo":true},
+    {"name":"Demo cat 3","sprite":"","demo":true}
+  ]
+}

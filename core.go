@@ -1,0 +1,354 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"image"
+	"image/draw"
+	"image/png"
+	"io"
+	"math"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+const appVersion = "0.1.0-demo"
+
+var rowFrames = [11]int{6, 8, 8, 4, 5, 8, 6, 6, 5, 8, 8}
+
+type Rect struct{ Left, Top, Right, Bottom int }
+
+func (r Rect) Width() int  { return r.Right - r.Left }
+func (r Rect) Height() int { return r.Bottom - r.Top }
+func clamp(v, lo, hi float64) float64 {
+	if hi < lo {
+		return lo
+	}
+	return math.Max(lo, math.Min(hi, v))
+}
+func ClampPosition(x, y float64, w, h int, r Rect) (float64, float64) {
+	return clamp(x, float64(r.Left), float64(r.Right-w)), clamp(y, float64(r.Top), float64(r.Bottom-h))
+}
+
+// FitSize preserves the sprite aspect and guarantees the window fits the work area.
+func FitSize(w, h int, r Rect) (int, int) {
+	w = max(1, w)
+	h = max(1, h)
+	ratio := math.Min(1, math.Min(float64(max(1, r.Width()))/float64(w), float64(max(1, r.Height()))/float64(h)))
+	return max(1, int(float64(w)*ratio)), max(1, int(float64(h)*ratio))
+}
+func GazeDirection(dx, dy float64) int {
+	a := math.Atan2(dx, -dy)
+	if a < 0 {
+		a += 2 * math.Pi
+	}
+	return int(math.Round(a/(math.Pi/8))) % 16
+}
+
+type CatSpec struct {
+	Name       string `json:"name"`
+	Sprite     string `json:"sprite"`
+	Animations string `json:"animations,omitempty"`
+	Demo       bool   `json:"demo"`
+}
+type Config struct {
+	Version int       `json:"version"`
+	Cats    []CatSpec `json:"cats"`
+}
+
+func DefaultConfig() Config {
+	return Config{Version: 1, Cats: []CatSpec{{Name: "Demo cat 1", Demo: true}, {Name: "Demo cat 2", Demo: true}, {Name: "Demo cat 3", Demo: true}}}
+}
+func LoadConfig(dir string) (Config, error) {
+	c := DefaultConfig()
+	data, e := readBoundedFile(filepath.Join(dir, "cats.json"), 64*1024)
+	if os.IsNotExist(e) {
+		return c, nil
+	}
+	if e != nil {
+		return c, e
+	}
+	if len(data) > 64*1024 {
+		return c, errors.New("cats.json is too large")
+	}
+	var custom Config
+	d := json.NewDecoder(strings.NewReader(string(data)))
+	d.DisallowUnknownFields()
+	if e = d.Decode(&custom); e != nil {
+		return c, e
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return c, errors.New("cats.json must contain one JSON object")
+	}
+	if custom.Version != 1 || len(custom.Cats) < 1 || len(custom.Cats) > 3 {
+		return c, errors.New("cats.json needs version 1 and 1 to 3 cats")
+	}
+	for i := range custom.Cats {
+		s := &custom.Cats[i]
+		s.Name = strings.TrimSpace(s.Name)
+		if s.Name == "" || strings.ContainsRune(s.Name, 0) || len([]rune(s.Name)) > 40 {
+			return c, fmt.Errorf("cat %d needs a name of 1 to 40 characters", i+1)
+		}
+		if s.Sprite != "" {
+			p := filepath.Clean(s.Sprite)
+			if !filepath.IsLocal(p) || filepath.IsAbs(p) || p == ".." || strings.HasPrefix(p, ".."+string(filepath.Separator)) || strings.Contains(p, ":") {
+				return c, fmt.Errorf("cat %d sprite must be a relative path inside the app folder", i+1)
+			}
+			s.Sprite = p
+		} else {
+			s.Demo = true
+		}
+		if s.Animations != "" {
+			p := filepath.Clean(s.Animations)
+			if !filepath.IsLocal(p) || strings.Contains(p, ":") {
+				return c, fmt.Errorf("cat %d animation manifest must be a local relative path", i+1)
+			}
+			s.Animations = p
+		}
+	}
+	return custom, nil
+}
+
+type Settings struct {
+	Quiet bool `json:"quiet"`
+	Size  int  `json:"size"`
+}
+
+func ValidSize(s int) int {
+	if s == 96 || s == 144 || s == 192 {
+		return s
+	}
+	return 144
+}
+func SaveSettings(path string, s Settings) error {
+	s.Size = ValidSize(s.Size)
+	if e := os.MkdirAll(filepath.Dir(path), 0700); e != nil {
+		return e
+	}
+	b, e := json.MarshalIndent(s, "", "  ")
+	if e != nil {
+		return e
+	}
+	tmp := path + ".tmp"
+	if e = os.WriteFile(tmp, b, 0600); e != nil {
+		return e
+	}
+	return os.Rename(tmp, path)
+}
+func LoadSettings(path string) Settings {
+	s := Settings{Size: 144}
+	if b, e := readBoundedFile(path, 4096); e == nil {
+		_ = json.Unmarshal(b, &s)
+	}
+	s.Size = ValidSize(s.Size)
+	return s
+}
+
+type Atlas struct {
+	Image        *image.NRGBA
+	CellW, CellH int
+}
+
+func DecodeAtlas(r io.Reader) (*Atlas, error) { return DecodeSprite(r, true) }
+func DecodeSprite(r io.Reader, legacy bool) (*Atlas, error) {
+	b, e := io.ReadAll(io.LimitReader(r, 24*1024*1024+1))
+	if e != nil {
+		return nil, e
+	}
+	if len(b) > 24*1024*1024 {
+		return nil, errors.New("sprite PNG exceeds 24 MB")
+	}
+	c, e := png.DecodeConfig(strings.NewReader(string(b)))
+	if e != nil {
+		return nil, e
+	}
+	if c.Width < 1 || c.Height < 1 || c.Width > 4096 || c.Height > 5632 || c.Width*c.Height > 8_000_000 || (legacy && (c.Width%8 != 0 || c.Height%11 != 0 || c.Width < 64 || c.Height < 88)) {
+		return nil, errors.New("sprite must be an 8-column, 11-row PNG atlas, at most 4096 x 5632")
+	}
+	im, e := png.Decode(strings.NewReader(string(b)))
+	if e != nil {
+		return nil, e
+	}
+	dst := image.NewNRGBA(im.Bounds())
+	draw.Draw(dst, dst.Bounds(), im, im.Bounds().Min, draw.Src)
+	transparent := false
+	for i := 3; i < len(dst.Pix); i += 4 {
+		if dst.Pix[i] == 0 {
+			transparent = true
+			break
+		}
+	}
+	if !transparent {
+		return nil, errors.New("sprite needs real transparent pixels")
+	}
+	if !legacy {
+		return &Atlas{dst, max(1, c.Width/8), max(1, c.Height/11)}, nil
+	}
+	a := &Atlas{dst, c.Width / 8, c.Height / 11}
+	if a.CellW < a.CellH/3 || a.CellH < a.CellW/3 {
+		return nil, errors.New("sprite cell aspect ratio must stay between 1:3 and 3:1")
+	}
+	for row, n := range rowFrames {
+		for col := 0; col < n; col++ {
+			opaque := 0
+			for y := row * a.CellH; y < (row+1)*a.CellH; y++ {
+				for x := col * a.CellW; x < (col+1)*a.CellW; x++ {
+					if dst.NRGBAAt(x, y).A > 24 {
+						opaque++
+					}
+				}
+			}
+			if opaque < 16 {
+				return nil, fmt.Errorf("sprite row %d frame %d is empty", row, col)
+			}
+		}
+	}
+	return a, nil
+}
+
+// FrameBGRA produces a top-down, premultiplied Windows DIB. Pixels below the
+// hit-test threshold become fully transparent, including invisible RGB data.
+func (a *Atlas) FrameBGRA(row, col, w, h int) []byte {
+	row = max(0, min(10, row))
+	col = max(0, min(rowFrames[row]-1, col))
+	out := make([]byte, w*h*4)
+	for y := 0; y < h; y++ {
+		sy := row*a.CellH + min(a.CellH-1, y*a.CellH/h)
+		for x := 0; x < w; x++ {
+			sx := col*a.CellW + min(a.CellW-1, x*a.CellW/w)
+			c := a.Image.NRGBAAt(sx, sy)
+			i := (y*w + x) * 4
+			if c.A < 24 {
+				continue
+			}
+			aa := uint32(c.A)
+			out[i] = byte(uint32(c.B) * aa / 255)
+			out[i+1] = byte(uint32(c.G) * aa / 255)
+			out[i+2] = byte(uint32(c.R) * aa / 255)
+			out[i+3] = c.A
+		}
+	}
+	return out
+}
+
+type Cat struct {
+	X, Y                                         float64
+	Mode                                         string
+	ModeUntil, NextDecision, PetUntil, GazeUntil float64
+	Direction                                    float64
+	Phase                                        float64
+	W, H                                         int
+	Bounds                                       Rect
+	Dragging                                     bool
+	Seed                                         *rand.Rand
+}
+
+func NewCat(i, w, h int, r Rect) *Cat {
+	c := &Cat{W: w, H: h, Bounds: r, Mode: "idle", NextDecision: 8 + float64(i)*3, Seed: rand.New(rand.NewSource(int64(701 + i*97))), Phase: float64(i) * .17}
+	c.X, c.Y = ClampPosition(float64(r.Left+40+i*(w+20)), float64(r.Bottom-h), w, h, r)
+	return c
+}
+func (c *Cat) Pet(now float64) {
+	c.PetUntil = now + 2
+	c.GazeUntil = now + 4
+	c.Mode = "idle"
+	c.NextDecision = now + 8 + c.Seed.Float64()*10
+}
+func (c *Cat) Tick(now, dt, cursorX, cursorY, idleSeconds float64, quiet bool) (int, int) {
+	if c.Dragging {
+		return 3, 1
+	}
+	if now < c.PetUntil {
+		return 3, int((now+c.Phase)*5) % 4
+	}
+	if quiet {
+		c.Mode = "sleep"
+		return 0, 3
+	}
+	if idleSeconds >= 180 {
+		c.Mode = "sleep"
+		return 0, 3
+	}
+	if c.Mode == "sleep" {
+		c.Mode = "idle"
+		c.NextDecision = now + 5
+	}
+	dx, dy := cursorX-(c.X+float64(c.W)/2), cursorY-(c.Y+float64(c.H)/2)
+	near := dx*dx+dy*dy < 420*420
+	if c.Mode == "walk" {
+		if now >= c.ModeUntil || near {
+			c.Mode = "idle"
+			c.NextDecision = now + 10 + c.Seed.Float64()*20
+		} else {
+			speed := float64(c.W) * .23
+			c.X += c.Direction * speed * dt
+			c.X, c.Y = ClampPosition(c.X, c.Y, c.W, c.H, c.Bounds)
+			if c.X <= float64(c.Bounds.Left) || c.X >= float64(c.Bounds.Right-c.W) {
+				c.Direction *= -1
+			}
+			row := 1
+			if c.Direction < 0 {
+				row = 2
+			}
+			return row, int((now+c.Phase)*10) % 8
+		}
+	}
+	if near || now < c.GazeUntil {
+		if math.Abs(dx)+math.Abs(dy) > 15 {
+			d := GazeDirection(dx, dy)
+			return 9 + d/8, d % 8
+		}
+	}
+	if now >= c.NextDecision {
+		c.Mode = "walk"
+		c.ModeUntil = now + 2 + c.Seed.Float64()*3
+		c.Direction = 1
+		if c.Seed.Intn(2) == 0 {
+			c.Direction = -1
+		}
+		c.NextDecision = now + 15
+		return 0, 0
+	}
+	return 0, int((now+c.Phase)*4) % 6
+}
+
+func readBoundedFile(path string, limit int64) ([]byte, error) {
+	f, e := os.Open(path)
+	if e != nil {
+		return nil, e
+	}
+	defer f.Close()
+	b, e := io.ReadAll(io.LimitReader(f, limit+1))
+	if e == nil && int64(len(b)) > limit {
+		return nil, fmt.Errorf("file exceeds %d bytes", limit)
+	}
+	return b, e
+}
+
+// FrameRectBGRA scales and registers a manifest rectangle around its normalized
+// anchor. Its aspect is preserved, and transparent margins stay click-through.
+func (a *Atlas) FrameRectBGRA(r FrameRect, anchor AnimationAnchor, w, h int) []byte {
+	out := make([]byte, w*h*4)
+	scale := math.Min(float64(w)/float64(r.W), float64(h)/float64(r.H))
+	sw, sh := max(1, int(float64(r.W)*scale)), max(1, int(float64(r.H)*scale))
+	ox := int(float64(w-sw) * anchor.X)
+	oy := int(float64(h-sh) * anchor.Y)
+	for y := 0; y < sh; y++ {
+		for x := 0; x < sw; x++ {
+			c := a.Image.NRGBAAt(r.X+x*r.W/sw, r.Y+y*r.H/sh)
+			if c.A < 24 {
+				continue
+			}
+			i := ((oy+y)*w + ox + x) * 4
+			alpha := uint32(c.A)
+			out[i] = byte(uint32(c.B) * alpha / 255)
+			out[i+1] = byte(uint32(c.G) * alpha / 255)
+			out[i+2] = byte(uint32(c.R) * alpha / 255)
+			out[i+3] = c.A
+		}
+	}
+	return out
+}

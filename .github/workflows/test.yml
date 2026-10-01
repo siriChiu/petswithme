@@ -1,0 +1,34 @@
+name: Source checks (no private artwork)
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - name: Unit tests and native Windows smoke checks
+        run: go test -buildvcs=false -v ./...
+      - name: Vet platform-neutral code
+        if: runner.os == 'Linux'
+        run: go vet ./...
+      - name: Race detector for pure behavior engine
+        if: runner.os == 'Linux'
+        run: go test -race ./...
+      - name: Compile Windows x64 GUI executable (source check only)
+        shell: bash
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w -H windowsgui' -o ThreeCatCompanion.exe .
