@@ -220,7 +220,7 @@ func (d *DIB) Resize(w, h int) error {
 func renderFrame(p *PetWindow, frame BehaviorFrame) error {
 	c := p.Cat
 	x, y := int(math.Round(c.X)), int(math.Round(c.Y))
-	key := fmt.Sprintf("%p:%d:%d:%v:%g:%g:%d:%d", p.Atlas, frame.Row, frame.Col, frame.Rect, frame.Anchor.X, frame.Anchor.Y, c.W, c.H)
+	key := fmt.Sprintf("%t:%p:%d:%d:%v:%g:%g:%d:%d", frame.Action == "drag", p.Atlas, frame.Row, frame.Col, frame.Rect, frame.Anchor.X, frame.Anchor.Y, c.W, c.H)
 	if key == p.LastKey && x == p.LastX && y == p.LastY {
 		return nil
 	}
@@ -230,11 +230,7 @@ func renderFrame(p *PetWindow, frame BehaviorFrame) error {
 	if key != p.LastKey {
 		pixels, ok := app.Frames[key]
 		if !ok {
-			if frame.Rect != nil {
-				pixels = p.Atlas.FrameRectBGRA(*frame.Rect, frame.Anchor, c.W, c.H)
-			} else {
-				pixels = p.Atlas.FrameBGRA(frame.Row, frame.Col, c.W, c.H)
-			}
+			pixels = RenderBehaviorPixels(p.Atlas, frame, c.W, c.H)
 			if app.CachedBytes+len(pixels) > 32*1024*1024 {
 				app.Frames = map[string][]byte{}
 				app.CachedBytes = 0
@@ -261,7 +257,7 @@ func renderFrame(p *PetWindow, frame BehaviorFrame) error {
 }
 func nowSeconds() float64 { return time.Since(app.Start).Seconds() }
 func setInterval() {
-	ms := uintptr(100)
+	ms := uintptr(50)
 	if app.Settings.Quiet {
 		ms = 250
 	}

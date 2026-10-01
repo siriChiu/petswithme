@@ -72,3 +72,28 @@ func TestOpenLocalAssetBoundary(t *testing.T) {
 		t.Fatal("accepted escaping link")
 	}
 }
+
+func TestGroundAnchorCannotSilentlyClipVisibleFeet(t *testing.T) {
+	im := image.NewNRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			im.SetNRGBA(x, y, color.NRGBA{A: 255})
+		}
+	}
+	a := &Atlas{Image: im}
+	frames := []AnimationFrame{{Rect: &FrameRect{0, 0, 8, 8}, DurationMS: 100}}
+	m := &AnimationManifest{SchemaVersion: 1, Fallback: "idle", Anchor: AnimationAnchor{.5, .75}, Actions: map[string]AnimationAction{"idle": {AnimationClip: AnimationClip{Loop: frames}}}}
+	if e := ValidateManifestPixels(m, a); e == nil {
+		t.Fatal("accepted clipping grounded artwork")
+	}
+	idleFrames := []AnimationFrame{{Rect: &FrameRect{0, 0, 8, 8}, Anchor: &AnimationAnchor{.5, 1}, DurationMS: 100}}
+	m.Actions["idle"] = AnimationAction{AnimationClip: AnimationClip{Loop: idleFrames}}
+	m.Actions["drag"] = AnimationAction{AnimationClip: AnimationClip{Loop: frames}}
+	if e := ValidateManifestPixels(m, a); e != nil {
+		t.Fatal("airborne drag should preserve full canvas:", e)
+	}
+	m.Actions["idle"] = AnimationAction{Fallback: "drag"}
+	if e := ValidateManifestPixels(m, a); e == nil {
+		t.Fatal("grounded alias clipped a drag fallback")
+	}
+}

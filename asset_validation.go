@@ -16,7 +16,24 @@ func ValidateManifestPixels(m *AnimationManifest, a *Atlas) error {
 	if e := m.Validate(a.Image.Bounds().Dx(), a.Image.Bounds().Dy()); e != nil {
 		return e
 	}
-	seen := map[FrameRect]bool{}
+	type stats struct{ count, minX, minY, maxX, maxY int }
+	cache := map[FrameRect]stats{}
+	canvasW, canvasH := ManifestCanvas(m, a)
+	dragGrounded := m.Fallback == "drag"
+	for start := range m.Actions {
+		if start == "drag" {
+			continue
+		}
+		seen := map[string]bool{}
+		for name := start; name != "" && !seen[name]; {
+			seen[name] = true
+			if name == "drag" {
+				dragGrounded = true
+				break
+			}
+			name = m.Actions[name].Fallback
+		}
+	}
 	names := make([]string, 0, len(m.Actions))
 	for name := range m.Actions {
 		names = append(names, name)
@@ -35,20 +52,38 @@ func ValidateManifestPixels(m *AnimationManifest, a *Atlas) error {
 					if frame.Rect != nil {
 						rect = *frame.Rect
 					}
-					if seen[rect] {
-						continue
-					}
-					seen[rect] = true
-					occupied := 0
-					for y := rect.Y; y < rect.Y+rect.H; y++ {
-						for x := rect.X; x < rect.X+rect.W; x++ {
-							if a.Image.NRGBAAt(x, y).A >= 24 {
-								occupied++
+					st, exists := cache[rect]
+					if !exists {
+						st = stats{minX: rect.W, minY: rect.H}
+						for y := 0; y < rect.H; y++ {
+							for x := 0; x < rect.W; x++ {
+								if a.Image.NRGBAAt(rect.X+x, rect.Y+y).A >= 24 {
+									st.count++
+									st.minX = min(st.minX, x)
+									st.minY = min(st.minY, y)
+									st.maxX = max(st.maxX, x+1)
+									st.maxY = max(st.maxY, y+1)
+								}
 							}
 						}
+						cache[rect] = st
 					}
-					if occupied < 16 {
+					if st.count < 16 {
 						return fmt.Errorf("action %q frame %d is empty or has fewer than 16 visible pixels", name, i)
+					}
+					if frame.Rect != nil && (name != "drag" || dragGrounded) {
+						anchor := m.Anchor
+						if frame.Anchor != nil {
+							anchor = *frame.Anchor
+						}
+						t := FrameRectTransform(rect, anchor, canvasW, canvasH, true)
+						left := float64(st.minX*t.ScaledW)/float64(rect.W) + float64(t.OffsetX)
+						right := float64(st.maxX*t.ScaledW)/float64(rect.W) + float64(t.OffsetX)
+						top := float64(st.minY*t.ScaledH)/float64(rect.H) + float64(t.OffsetY)
+						bottom := float64(st.maxY*t.ScaledH)/float64(rect.H) + float64(t.OffsetY)
+						if left < 0 || top < 0 || right > float64(canvasW) || bottom > float64(canvasH) {
+							return fmt.Errorf("action %q frame %d would clip visible pixels when its ground anchor is aligned; correct its anchor or registration", name, i)
+						}
 					}
 				}
 			}

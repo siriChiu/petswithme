@@ -189,3 +189,23 @@ func TestManifestCanvasMixedFrames(t *testing.T) {
 		t.Fatal(w, h)
 	}
 }
+
+func TestGroundAnchorReachesWindowFloorWithoutPaddingFloat(t *testing.T) {
+	im := image.NewNRGBA(image.Rect(0, 0, 8, 8))
+	for y := 2; y < 6; y++ {
+		for x := 2; x < 6; x++ {
+			im.SetNRGBA(x, y, color.NRGBA{R: 255, A: 255})
+		}
+	}
+	a := &Atlas{Image: im}
+	f := BehaviorFrame{AnimationFrame: AnimationFrame{Rect: &FrameRect{0, 0, 8, 8}}, Anchor: AnimationAnchor{.5, .75}, Action: "walk_right"}
+	pixels := RenderBehaviorPixels(a, f, 8, 8)
+	if pixels[(7*8+3)*4+3] != 255 {
+		t.Fatal("declared source floor still floated above window floor")
+	}
+	f.Action = "drag"
+	pixels = RenderBehaviorPixels(a, f, 8, 8)
+	if pixels[(5*8+3)*4+3] != 255 || pixels[(7*8+3)*4+3] != 0 {
+		t.Fatal("drag did not preserve airborne canvas")
+	}
+}

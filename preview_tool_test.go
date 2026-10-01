@@ -10,6 +10,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -243,5 +244,182 @@ func TestPreviewCLIValidation(t *testing.T) {
 		if err := previewMain(args, &output, &output); err == nil {
 			t.Fatalf("accepted invalid CLI arguments: %v", args)
 		}
+	}
+}
+
+func previewTestGaitPack(t *testing.T) string {
+	t.Helper()
+	root := previewTestPack(t)
+	b, err := os.ReadFile(filepath.Join(root, "qa.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m AnimationManifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	m.Actions["walk_right"] = AnimationAction{AnimationClip: m.Actions["idle"].AnimationClip, Movement: &AnimationMovement{StrideRatio: .5, Verified: true}}
+	m.Actions["walk_left"] = AnimationAction{Fallback: "walk_right"}
+	previewTestWriteJSON(t, filepath.Join(root, "qa.json"), m)
+	return root
+}
+
+func TestPreviewGaitTranslationPerCycle(t *testing.T) {
+	opts := previewTestOptions(previewTestGaitPack(t), filepath.Join(t.TempDir(), "gait"))
+	opts.GaitOnly = true
+	opts.FPS = 20
+	opts.ActionDuration = 300 * time.Millisecond
+	meta, err := renderMotionPreview(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.CanvasWidth != 900 || meta.CanvasHeight != 660 || !meta.GaitOnly || len(meta.Scenes) != 2 || meta.FrameCount != 12 || len(meta.Frames) != 12 {
+		t.Fatalf("bad gait schedule: %#v", meta)
+	}
+	for sceneIndex, scene := range meta.Scenes {
+		for lane, gait := range scene.Gait {
+			if gait.PixelsPerSecond != WalkPixelsPerSecond(mustPreviewTestLoadCats(t, opts.Root)[lane].Manifest, scene.Action, scene.Mood, 8) || gait.CycleSeconds != .2 || gait.EffectiveStrideRatio != .5 || !gait.Calibrated || gait.DeclaredStrideRatio == nil || *gait.DeclaredStrideRatio != .5 || gait.LegacySpeedFallback {
+				t.Fatalf("incorrect calibrated speed: %#v", gait)
+			}
+			if gait.MovementFallback != (sceneIndex == 1) || gait.MovementSource != "walk_right" {
+				t.Fatalf("wrong movement fallback attribution: %#v", gait)
+			}
+			if gait.RootPixelsPerSample != 1 || gait.MaxSpriteHoldSeconds != .1 || gait.MaxRootTravelPerHold != 2 {
+				t.Fatalf("held-pose sampling effect is not recorded correctly: %#v", gait)
+			}
+			first := meta.Frames[scene.StartFrame].Cats[lane]
+			afterCycle := meta.Frames[scene.StartFrame+4].Cats[lane]
+			wantDisplacement := 8 * .5
+			if sceneIndex == 1 {
+				wantDisplacement = -wantDisplacement
+			}
+			if afterCycle.X-first.X != wantDisplacement || float64(afterCycle.RenderedX-first.RenderedX) != wantDisplacement || first.Y != gait.Top || first.SourceFrame.DurationMS != 100 || first.Phase != AnimationLoop || afterCycle.AnimationIndex != 0 {
+				t.Fatalf("wrong px-per-cycle displacement or source frame: first=%#v, after=%#v", first, afterCycle)
+			}
+			for _, frame := range meta.Frames[scene.StartFrame:scene.EndFrame] {
+				pos := frame.Cats[lane]
+				if pos.RenderedX != int(math.Round(pos.X)) || pos.RenderedX < previewGaitMargin || pos.RenderedX+8 > previewCanvasWidth-previewGaitMargin || pos.Y < lane*previewGaitLane {
+					t.Fatalf("position clipped or crossed lane: %#v", pos)
+				}
+			}
+		}
+	}
+	f, err := os.Open(filepath.Join(opts.Out, fmt.Sprintf(previewFramePattern, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	im, err := png.Decode(f)
+	f.Close()
+	if err != nil || im.Bounds() != image.Rect(0, 0, 900, 660) {
+		t.Fatalf("bad gait canvas: %v", err)
+	}
+	for lane, gait := range meta.Scenes[0].Gait {
+		if got := color.RGBAModel.Convert(im.At(40, gait.Top)).(color.RGBA); got != (color.RGBA{R: 200, G: 20, B: 40, A: 255}) {
+			t.Fatalf("lane %d missing actual source pixels: %v", lane, got)
+		}
+		if got := color.RGBAModel.Convert(im.At(40, gait.BaselineY+2)).(color.RGBA); got == previewBackground {
+			t.Fatalf("lane %d missing ground ticks", lane)
+		}
+	}
+}
+
+func mustPreviewTestLoadCats(t *testing.T, root string) []previewCat {
+	t.Helper()
+	cats, err := loadPreviewCats(root, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cats
+}
+
+func TestPreviewGaitCalibrationHonesty(t *testing.T) {
+	cat := mustPreviewTestLoadCats(t, previewTestGaitPack(t))[0]
+	direct := cat.Manifest.Actions["walk_right"]
+	direct.Movement = nil
+	cat.Manifest.Actions["walk_right"] = direct
+	info, err := previewGaitInfo(&cat, "walk_right", "calm", 0, 60, 20)
+	if err != nil || info.Calibrated || !info.LegacySpeedFallback || info.Status != "uncalibrated_legacy_speed" || math.Abs(info.PixelsPerSecond-8*.23) > 1e-9 {
+		t.Fatalf("unmeasured walk called calibrated: %#v %v", info, err)
+	}
+	// A global fallback's stride metadata must not be inherited by an absent
+	// action: ResolveMovement in the application does not do that either.
+	idle := cat.Manifest.Actions["idle"]
+	idle.Movement = &AnimationMovement{StrideRatio: 1}
+	cat.Manifest.Actions["idle"] = idle
+	delete(cat.Manifest.Actions, "walk_right")
+	info, err = previewGaitInfo(&cat, "walk_right", "calm", 0, 60, 20)
+	if err != nil || info.Calibrated || info.LegacySpeedFallback || info.DeclaredStrideRatio != nil || info.Status != "missing_walk_animation" || info.Warning == "" || info.PixelsPerSecond != 0 || info.StartX != info.EndX {
+		t.Fatalf("idle fallback called calibrated walk: %#v %v", info, err)
+	}
+	// Even explicitly supplied stride metadata cannot make a static loop into
+	// valid gait artwork, including two copies of the same pose.
+	direct.Movement = &AnimationMovement{StrideRatio: .5}
+	direct.Loop = []AnimationFrame{direct.Loop[0], direct.Loop[0]}
+	cat.Manifest.Actions["walk_right"] = direct
+	info, err = previewGaitInfo(&cat, "walk_right", "calm", 0, 60, 20)
+	if err != nil || info.Calibrated || info.Status != "missing_walk_animation" || !strings.Contains(info.Warning, "no distinct rendered poses") || info.PixelsPerSecond != 0 || info.StartX != info.EndX {
+		t.Fatalf("static loop called calibrated walk: %#v %v", info, err)
+	}
+	cat.Manifest.Actions["walk_right"] = AnimationAction{Fallback: "idle", Movement: &AnimationMovement{StrideRatio: .5}}
+	info, err = previewGaitInfo(&cat, "walk_right", "calm", 0, 60, 20)
+	if err != nil || info.Calibrated || info.Status != "missing_walk_animation" || info.PixelsPerSecond != 0 || info.StartX != info.EndX {
+		t.Fatalf("declared idle alias called calibrated walk: %#v %v", info, err)
+	}
+}
+
+func TestPreviewGaitRejectsClippedTrajectory(t *testing.T) {
+	opts := previewTestOptions(previewTestGaitPack(t), filepath.Join(t.TempDir(), "too-far"))
+	opts.GaitOnly = true
+	opts.Width = 144
+	opts.ActionDuration = 3 * time.Second
+	if _, err := renderMotionPreview(opts); err == nil || !strings.Contains(err.Error(), "cannot fit the gait lane") {
+		t.Fatalf("clipped movement was not rejected: %v", err)
+	}
+	if _, err := os.Stat(opts.Out); !os.IsNotExist(err) {
+		t.Fatalf("invalid trajectory created output: %v", err)
+	}
+}
+
+func TestPreviewGaitDefaultAndExplicitFPS(t *testing.T) {
+	root := previewTestGaitPack(t)
+	for _, explicitFPS := range []bool{false, true} {
+		out := filepath.Join(t.TempDir(), "frames")
+		args := []string{"--root", root, "--out", out, "--width", "8", "--gait-only", "--action-duration", "100ms"}
+		wantFPS := 20
+		if explicitFPS {
+			args = append(args, "--fps", "10")
+			wantFPS = 10
+		}
+		var stdout, stderr bytes.Buffer
+		if err := previewMain(args, &stdout, &stderr); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(out, "metadata.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var meta previewMetadata
+		if err := json.Unmarshal(b, &meta); err != nil || meta.FPS != wantFPS || !meta.GaitOnly {
+			t.Fatalf("gait FPS default or override failed: fps=%d want=%d, err=%v", meta.FPS, wantFPS, err)
+		}
+	}
+}
+
+func TestPreviewTrialStrideIsNotCalledVerified(t *testing.T) {
+	root := previewTestPack(t)
+	cats, e := loadPreviewCats(root, 8)
+	if e != nil {
+		t.Fatal(e)
+	}
+	cat := &cats[0]
+	a := cat.Manifest.Actions["idle"]
+	a.Movement = &AnimationMovement{StrideRatio: .48}
+	cat.Manifest.Actions["walk_right"] = a
+	info, e := previewGaitInfo(cat, "walk_right", "calm", 0, 4, 20)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if info.Calibrated || info.Status != "trial_stride" || info.Warning == "" {
+		t.Fatalf("trial called verified: %+v", info)
 	}
 }

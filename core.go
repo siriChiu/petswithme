@@ -330,19 +330,43 @@ func readBoundedFile(path string, limit int64) ([]byte, error) {
 
 // FrameRectBGRA scales and registers a manifest rectangle around its normalized
 // anchor. Its aspect is preserved, and transparent margins stay click-through.
-func (a *Atlas) FrameRectBGRA(r FrameRect, anchor AnimationAnchor, w, h int) []byte {
-	out := make([]byte, w*h*4)
+type SpriteTransform struct {
+	ScaledW int `json:"scaled_width"`
+	ScaledH int `json:"scaled_height"`
+	OffsetX int `json:"offset_x"`
+	OffsetY int `json:"offset_y"`
+}
+
+func FrameRectTransform(r FrameRect, anchor AnimationAnchor, w, h int, grounded bool) SpriteTransform {
 	scale := math.Min(float64(w)/float64(r.W), float64(h)/float64(r.H))
 	sw, sh := max(1, int(float64(r.W)*scale)), max(1, int(float64(r.H)*scale))
-	ox := int(float64(w-sw) * anchor.X)
-	oy := int(float64(h-sh) * anchor.Y)
-	for y := 0; y < sh; y++ {
-		for x := 0; x < sw; x++ {
-			c := a.Image.NRGBAAt(r.X+x*r.W/sw, r.Y+y*r.H/sh)
+	ox, oy := int(float64(w-sw)*anchor.X), int(float64(h-sh)*anchor.Y)
+	if grounded {
+		ox = int(math.Round(float64(w)/2 - float64(sw)*anchor.X))
+		oy = int(math.Round(float64(h) - float64(sh)*anchor.Y))
+	}
+	return SpriteTransform{sw, sh, ox, oy}
+}
+func (a *Atlas) FrameRectBGRA(r FrameRect, anchor AnimationAnchor, w, h int) []byte {
+	return a.frameRectTransformed(r, w, h, FrameRectTransform(r, anchor, w, h, false))
+}
+func (a *Atlas) frameRectTransformed(r FrameRect, w, h int, t SpriteTransform) []byte {
+	out := make([]byte, w*h*4)
+	for y := 0; y < t.ScaledH; y++ {
+		dy := t.OffsetY + y
+		if dy < 0 || dy >= h {
+			continue
+		}
+		for x := 0; x < t.ScaledW; x++ {
+			dx := t.OffsetX + x
+			if dx < 0 || dx >= w {
+				continue
+			}
+			c := a.Image.NRGBAAt(r.X+x*r.W/t.ScaledW, r.Y+y*r.H/t.ScaledH)
 			if c.A < 24 {
 				continue
 			}
-			i := ((oy+y)*w + ox + x) * 4
+			i := (dy*w + dx) * 4
 			alpha := uint32(c.A)
 			out[i] = byte(uint32(c.B) * alpha / 255)
 			out[i+1] = byte(uint32(c.G) * alpha / 255)
@@ -351,6 +375,15 @@ func (a *Atlas) FrameRectBGRA(r FrameRect, anchor AnimationAnchor, w, h int) []b
 		}
 	}
 	return out
+}
+
+// Grounded actions place the source reference floor on the window's bottom.
+// Dragging is airborne and preserves the full canvas, including dangling tails.
+func RenderBehaviorPixels(a *Atlas, f BehaviorFrame, w, h int) []byte {
+	if f.Rect == nil {
+		return a.FrameBGRA(f.Row, f.Col, w, h)
+	}
+	return a.frameRectTransformed(*f.Rect, w, h, FrameRectTransform(*f.Rect, f.Anchor, w, h, f.Action != "drag"))
 }
 
 func ManifestCanvas(m *AnimationManifest, a *Atlas) (int, int) {

@@ -42,11 +42,17 @@ type AnimationClip struct {
 	Loop  []AnimationFrame `json:"loop,omitempty"`
 	End   []AnimationFrame `json:"end,omitempty"`
 }
+type AnimationMovement struct {
+	StrideRatio float64 `json:"strideRatio"`
+	Verified    bool    `json:"verified,omitempty"`
+}
+
 type AnimationAction struct {
 	AnimationClip
 	Fallback     string                   `json:"fallback,omitempty"`
 	Moods        map[string]AnimationClip `json:"moods,omitempty"`
 	DemoFallback bool                     `json:"demoFallback,omitempty"`
+	Movement     *AnimationMovement       `json:"movement,omitempty"`
 }
 
 func LoadAnimationManifest(r io.Reader, imageWidth, imageHeight int) (*AnimationManifest, error) {
@@ -110,6 +116,9 @@ func (m *AnimationManifest) Validate(imageWidth, imageHeight int) error {
 		return nil
 	}
 	for name, a := range m.Actions {
+		if a.Movement != nil && (!finite(a.Movement.StrideRatio) || a.Movement.StrideRatio <= 0 || a.Movement.StrideRatio > 2) {
+			return fmt.Errorf("action %q strideRatio must be finite and between 0 (exclusive) and 2", name)
+		}
 		if name == "" || len(name) > 64 {
 			return errors.New("action names must be 1 to 64 bytes")
 		}
@@ -556,7 +565,15 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 					} else {
 						action = "walk_right"
 					}
-					e.moveToward(i, intent.TargetX, intent.TargetY, float64(c.W)*.30*dt)
+					oldX, oldY := c.X, c.Y
+					if math.Hypot(intent.TargetX-c.X, intent.TargetY-c.Y) <= 1 {
+						action = "idle"
+					} else {
+						e.moveToward(i, intent.TargetX, intent.TargetY, WalkPixelsPerSecond(s.Player.Manifest, action, s.Mood, c.W)*dt)
+						if math.Hypot(c.X-oldX, c.Y-oldY) < .01 {
+							action = "idle"
+						}
+					}
 				}
 			} else {
 				if s.Priority == PrioritySocial || s.Action == "sleep" {
@@ -576,8 +593,12 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 							action = "walk_left"
 						}
 						oldX := c.X
-						e.moveToward(i, c.X+c.Direction*100, c.Y, float64(c.W)*.23*dt)
+						e.moveToward(i, c.X+c.Direction*100, c.Y, WalkPixelsPerSecond(s.Player.Manifest, action, s.Mood, c.W)*dt)
 						if math.Abs(c.X-oldX) < .01 {
+							s.Priority = PriorityIdle
+							s.Action = "idle"
+							s.Until = 0
+							s.NextDecision = now + 3 + c.Seed.Float64()*5
 							c.Direction *= -1
 						}
 					}
@@ -735,7 +756,7 @@ func (s *SocialCoordinator) Start(cats []*Cat, a, b int, now float64) bool {
 	if ar || br || ca.Dragging || cb.Dragging || now < s.Cooldown[a] || now < s.Cooldown[b] || ca.Bounds != cb.Bounds {
 		return false
 	}
-	if math.Abs((ca.Y+float64(ca.H))-(cb.Y+float64(cb.H))) > float64(min(ca.H, cb.H))*.4 {
+	if math.Abs((ca.Y+float64(ca.H))-(cb.Y+float64(cb.H))) > 8 {
 		return false
 	}
 	if math.Abs(ca.X-cb.X) > math.Max(520, float64(max(ca.W, cb.W))*4) {
@@ -777,7 +798,6 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 		}
 		a, b := cats[p.A], cats[p.B]
 		gap := socialGap(a, b)
-		floor := math.Min(a.Y+float64(a.H), b.Y+float64(b.H))
 		distance := b.X - (a.X + float64(a.W))
 		switch p.Phase {
 		case "approach":
@@ -791,8 +811,8 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 				center := (a.X + float64(a.W) + b.X) / 2
 				ax := clamp(center-gap/2-float64(a.W), float64(a.Bounds.Left), float64(a.Bounds.Right-a.W-b.W)-gap)
 				bx := ax + float64(a.W) + gap
-				intents[p.A] = SocialIntent{"approach", ax, floor - float64(a.H), true}
-				intents[p.B] = SocialIntent{"approach", bx, floor - float64(b.H), true}
+				intents[p.A] = SocialIntent{"approach", ax, a.Y, true}
+				intents[p.B] = SocialIntent{"approach", bx, b.Y, true}
 				continue
 			}
 		case "greet":
@@ -857,4 +877,97 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 		}
 	}
 	return intents
+}
+
+// ResolveMovement follows declared action aliases, but never fabricates stride
+// calibration for a missing or static fallback animation.
+func ResolveMovement(m *AnimationManifest, action string) *AnimationMovement {
+	if m == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	for !seen[action] {
+		seen[action] = true
+		a, ok := m.Actions[action]
+		if !ok {
+			return nil
+		}
+		if a.Movement != nil {
+			return a.Movement
+		}
+		if a.Fallback == "" {
+			return nil
+		}
+		action = a.Fallback
+	}
+	return nil
+}
+
+// WalkPixelsPerSecond converts a measured source stride into rendered motion.
+// Without an explicitly calibrated stride, preserve the legacy conservative
+// rate. Callers and preview metadata must identify that fallback as uncalibrated.
+func WalkPixelsPerSecond(m *AnimationManifest, action, mood string, width int) float64 {
+	if width <= 0 || !HasWalkAnimation(m, action, mood) {
+		return 0
+	}
+	movement := ResolveMovement(m, action)
+	if movement == nil || !finite(movement.StrideRatio) || movement.StrideRatio <= 0 {
+		return float64(width) * .23
+	}
+	clip := m.Resolve(action, mood)
+	milliseconds := 0
+	for _, f := range clip.Loop {
+		milliseconds += f.DurationMS
+	}
+	if milliseconds <= 0 {
+		return float64(width) * .23
+	}
+	return float64(width) * movement.StrideRatio / (float64(milliseconds) / 1000)
+}
+
+// HasWalkAnimation prevents a missing walk action from sliding a sitting/idle
+// fallback across the desktop. It proves only distinct referenced frames, not
+// anatomical gait quality; supplied artwork still needs motion review.
+func HasWalkAnimation(m *AnimationManifest, action, mood string) bool {
+	if m == nil {
+		return false
+	}
+	name := action
+	seen := map[string]bool{}
+	var clip AnimationClip
+	for {
+		if seen[name] {
+			return false
+		}
+		seen[name] = true
+		a, ok := m.Actions[name]
+		if !ok {
+			return false
+		}
+		if v, ok := a.Moods[mood]; ok && len(v.Loop) > 0 {
+			clip = v
+			break
+		}
+		if len(a.Loop) > 0 {
+			clip = a.AnimationClip
+			break
+		}
+		if a.Fallback == "" {
+			return false
+		}
+		name = a.Fallback
+	}
+	switch name {
+	case "idle", "sleep", "sit", "rest", "social_rest", "pet", "drag", "greet":
+		return false
+	}
+	unique := map[[6]int]bool{}
+	for _, f := range clip.Loop {
+		key := [6]int{f.Row, f.Col, -1, -1, 0, 0}
+		if f.Rect != nil {
+			key = [6]int{f.Rect.X, f.Rect.Y, f.Rect.W, f.Rect.H, 0, 0}
+		}
+		unique[key] = true
+	}
+	return len(unique) >= 2
 }

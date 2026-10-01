@@ -419,3 +419,97 @@ func TestBehaviorWakePlaysSleepEnd(t *testing.T) {
 		t.Fatalf("wake did not return idle: %s", f.Action)
 	}
 }
+
+func TestBehaviorStrideMatchesLoopPeriod(t *testing.T) {
+	m := DefaultAnimationManifest()
+	a := m.Actions["walk_right"]
+	a.Loop = []AnimationFrame{{Row: 1, Col: 0, DurationMS: 100}, {Row: 1, Col: 1, DurationMS: 200}, {Row: 1, Col: 2, DurationMS: 300}}
+	a.Movement = &AnimationMovement{StrideRatio: .3}
+	m.Actions["walk_right"] = a
+	if got := WalkPixelsPerSecond(m, "walk_right", "calm", 144); math.Abs(got-72) > .0001 {
+		t.Fatal(got)
+	}
+	if got := WalkPixelsPerSecond(m, "walk_right", "calm", 192); math.Abs(got-96) > .0001 {
+		t.Fatal(got)
+	}
+	m.Actions["alias"] = AnimationAction{Fallback: "walk_right"}
+	if ResolveMovement(m, "alias") == nil {
+		t.Fatal("lost movement alias")
+	}
+	if ResolveMovement(m, "unknown") != nil {
+		t.Fatal("fabricated movement")
+	}
+	if got := WalkPixelsPerSecond(m, "unknown", "calm", 144); got != 0 {
+		t.Fatal(got)
+	}
+}
+func TestBehaviorStrideValidation(t *testing.T) {
+	for _, ratio := range []float64{0, -1, 3, math.Inf(1)} {
+		m := DefaultAnimationManifest()
+		a := m.Actions["walk_right"]
+		a.Movement = &AnimationMovement{StrideRatio: ratio}
+		m.Actions["walk_right"] = a
+		if e := m.Validate(1536, 2288); e == nil {
+			t.Fatalf("accepted stride %v", ratio)
+		}
+	}
+}
+func TestBehaviorBlockedWanderStopsFeet(t *testing.T) {
+	c := NewCat(0, 100, 108, Rect{0, 0, 300, 200})
+	c.X = 200
+	c.Direction = 1
+	e := NewBehaviorEngine([]*Cat{c}, DefaultAnimationManifest())
+	s := e.States[0]
+	s.Action = "walk_right"
+	s.Priority = PriorityWander
+	s.Until = 10
+	f := e.Tick(1, .1, 9000, 9000, 0, false)[0]
+	if f.Action != "idle" || s.Priority != PriorityIdle {
+		t.Fatalf("kept walking against wall: %s", f.Action)
+	}
+}
+func TestBehaviorSocialDoesNotMoveBetweenFloors(t *testing.T) {
+	cats := []*Cat{NewCat(0, 100, 108, Rect{0, 0, 1000, 800}), NewCat(1, 100, 108, Rect{0, 0, 1000, 800})}
+	cats[1].Y -= 20
+	if NewSocialCoordinator().Start(cats, 0, 1, 1) {
+		t.Fatal("allowed floating vertical approach")
+	}
+}
+
+func TestBehaviorMissingWalkDoesNotSlide(t *testing.T) {
+	m := DefaultAnimationManifest()
+	m.Actions["walk_left"] = AnimationAction{Fallback: "idle", DemoFallback: true}
+	if HasWalkAnimation(m, "walk_left", "calm") || WalkPixelsPerSecond(m, "walk_left", "calm", 144) != 0 {
+		t.Fatal("idle fallback treated as walking")
+	}
+	a := m.Actions["walk_right"]
+	a.Loop = a.Loop[:1]
+	m.Actions["walk_right"] = a
+	if HasWalkAnimation(m, "walk_right", "calm") {
+		t.Fatal("single pose treated as walking")
+	}
+}
+
+func TestBehaviorMovementTravelsMeasuredStridePerCycle(t *testing.T) {
+	m := DefaultAnimationManifest()
+	a := m.Actions["walk_right"]
+	a.Loop = []AnimationFrame{{Row: 1, Col: 0, DurationMS: 100}, {Row: 1, Col: 1, DurationMS: 200}, {Row: 1, Col: 2, DurationMS: 300}}
+	a.Movement = &AnimationMovement{StrideRatio: .3}
+	m.Actions["walk_right"] = a
+	c := NewCat(0, 144, 156, Rect{0, 0, 2000, 1000})
+	c.X = 50
+	c.Direction = 1
+	e := NewBehaviorEngine([]*Cat{c}, m)
+	s := e.States[0]
+	s.Action = "walk_right"
+	s.Priority = PriorityWander
+	s.Until = 20
+	elapsed := 0.0
+	for _, dt := range []float64{.05, .15, .1, .1, .2} {
+		elapsed += dt
+		e.Tick(elapsed, dt, 9000, 9000, 0, false)
+	}
+	if want := 50 + 144*.3; math.Abs(c.X-want) > 1e-7 {
+		t.Fatalf("moved %g; want %g after one cycle", c.X, want)
+	}
+}

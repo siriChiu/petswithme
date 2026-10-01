@@ -7,6 +7,7 @@ package main
 // generated artwork fallback.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -27,6 +28,9 @@ const (
 	previewCanvasHeight = 360
 	previewColumns      = 3
 	previewFramePattern = "frame_%06d.png"
+	previewGaitHeight   = 660
+	previewGaitLane     = 220
+	previewGaitMargin   = 40
 )
 
 var previewBackground = color.RGBA{R: 244, G: 239, B: 231, A: 255}
@@ -38,6 +42,7 @@ type previewOptions struct {
 	Width          int
 	ActionDuration time.Duration
 	GazeDuration   time.Duration
+	GaitOnly       bool
 }
 
 type previewCat struct {
@@ -77,23 +82,72 @@ type previewScene struct {
 	StartSeconds float64               `json:"start_seconds"`
 	EndSeconds   float64               `json:"end_seconds"`
 	Sources      []previewActionSource `json:"sources"`
+	Gait         []previewGaitSource   `json:"gait,omitempty"`
+}
+
+type previewGaitSource struct {
+	Name                 string   `json:"name"`
+	Lane                 int      `json:"lane"`
+	PixelsPerSecond      float64  `json:"pixels_per_second"`
+	RootPixelsPerSample  float64  `json:"root_pixels_per_sample"`
+	MaxSpriteHoldSeconds float64  `json:"max_sprite_hold_seconds"`
+	MaxRootTravelPerHold float64  `json:"max_root_travel_per_sprite_hold"`
+	CycleSeconds         float64  `json:"cycle_seconds"`
+	LoopFrames           int      `json:"loop_frames"`
+	DeclaredStrideRatio  *float64 `json:"declared_stride_ratio,omitempty"`
+	EffectiveStrideRatio float64  `json:"effective_stride_ratio"`
+	MovementSource       string   `json:"movement_source,omitempty"`
+	MovementFallback     bool     `json:"movement_fallback"`
+	LegacySpeedFallback  bool     `json:"legacy_speed_fallback"`
+	Calibrated           bool     `json:"calibrated"`
+	Status               string   `json:"status"`
+	Warning              string   `json:"warning,omitempty"`
+	StartX               float64  `json:"start_x"`
+	EndX                 float64  `json:"end_x_at_scene_boundary"`
+	Top                  int      `json:"top"`
+	BaselineY            int      `json:"baseline_y"`
+}
+
+type previewFramePosition struct {
+	Name           string           `json:"name"`
+	Lane           int              `json:"lane"`
+	X              float64          `json:"x"`
+	Y              int              `json:"y"`
+	RenderedX      int              `json:"rendered_x"`
+	RenderedY      int              `json:"rendered_y"`
+	Phase          AnimationPhase   `json:"phase"`
+	AnimationIndex int              `json:"animation_index"`
+	ElapsedMS      float64          `json:"elapsed_ms"`
+	SourceFrame    AnimationFrame   `json:"source_frame"`
+	Anchor         AnimationAnchor  `json:"anchor"`
+	Transform      *SpriteTransform `json:"transform,omitempty"`
+}
+
+type previewFramePositions struct {
+	Frame        int                    `json:"frame"`
+	Seconds      float64                `json:"seconds"`
+	SceneSeconds float64                `json:"scene_seconds"`
+	Action       string                 `json:"action"`
+	Cats         []previewFramePosition `json:"cats"`
 }
 
 type previewMetadata struct {
-	Version                        int                  `json:"version"`
-	CanvasWidth                    int                  `json:"canvas_width"`
-	CanvasHeight                   int                  `json:"canvas_height"`
-	Background                     string               `json:"background"`
-	FPS                            int                  `json:"fps"`
-	RequestedActionDurationSeconds float64              `json:"requested_action_duration_seconds"`
-	RequestedGazeDurationSeconds   float64              `json:"requested_gaze_duration_seconds"`
-	FramePattern                   string               `json:"frame_pattern"`
-	FirstFrame                     int                  `json:"first_frame"`
-	FrameCount                     int                  `json:"frame_count"`
-	DurationSeconds                float64              `json:"duration_seconds"`
-	Notes                          []string             `json:"notes"`
-	Cats                           []previewCatMetadata `json:"cats"`
-	Scenes                         []previewScene       `json:"scenes"`
+	Version                        int                     `json:"version"`
+	CanvasWidth                    int                     `json:"canvas_width"`
+	CanvasHeight                   int                     `json:"canvas_height"`
+	Background                     string                  `json:"background"`
+	FPS                            int                     `json:"fps"`
+	RequestedActionDurationSeconds float64                 `json:"requested_action_duration_seconds"`
+	RequestedGazeDurationSeconds   float64                 `json:"requested_gaze_duration_seconds"`
+	FramePattern                   string                  `json:"frame_pattern"`
+	FirstFrame                     int                     `json:"first_frame"`
+	FrameCount                     int                     `json:"frame_count"`
+	DurationSeconds                float64                 `json:"duration_seconds"`
+	Notes                          []string                `json:"notes"`
+	Cats                           []previewCatMetadata    `json:"cats"`
+	Scenes                         []previewScene          `json:"scenes"`
+	GaitOnly                       bool                    `json:"gait_only,omitempty"`
+	Frames                         []previewFramePositions `json:"frames,omitempty"`
 }
 
 func main() {
@@ -109,10 +163,11 @@ func previewMain(args []string, stdout, stderr io.Writer) error {
 	opts := previewOptions{}
 	fs.StringVar(&opts.Root, "root", "", "private pack directory containing cats.json (required)")
 	fs.StringVar(&opts.Out, "out", "", "new or empty output directory for PNG sequence and metadata.json (required)")
-	fs.IntVar(&opts.FPS, "fps", 10, "output frames per second (1 to 120)")
+	fs.IntVar(&opts.FPS, "fps", 10, "output frames per second (1 to 120; gait-only defaults to 20)")
 	fs.IntVar(&opts.Width, "width", 144, "cat canvas width in pixels at 100% display scaling (1 to 280)")
 	fs.DurationVar(&opts.ActionDuration, "action-duration", 3*time.Second, "duration of each action, for example 3s")
 	fs.DurationVar(&opts.GazeDuration, "gaze-duration", 4800*time.Millisecond, "duration of the complete 16-direction gaze sweep, for example 4.8s")
+	fs.BoolVar(&opts.GaitOnly, "gait-only", false, "review translated right/left walks at app speed in three 900x220 ground-marked lanes")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: go run -tags motionpreview . --root PRIVATE_PACK --out EMPTY_OUTPUT [options]")
 		fs.PrintDefaults()
@@ -126,12 +181,26 @@ func previewMain(args []string, stdout, stderr io.Writer) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected positional arguments: %v", fs.Args())
 	}
+	if opts.GaitOnly {
+		fpsSupplied := false
+		fs.Visit(func(f *flag.Flag) { fpsSupplied = fpsSupplied || f.Name == "fps" })
+		if !fpsSupplied {
+			opts.FPS = 20 // Match the application's normal 50ms timer.
+		}
+	}
 	meta, err := renderMotionPreview(opts)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Rendered %d frames at %d fps (%.3fs), %d supplied cats, %dx%d canvas\n", meta.FrameCount, meta.FPS, meta.DurationSeconds, len(meta.Cats), meta.CanvasWidth, meta.CanvasHeight)
 	fmt.Fprintf(stdout, "PNG sequence: %s\nMetadata: %s\n", filepath.Join(opts.Out, previewFramePattern), filepath.Join(opts.Out, "metadata.json"))
+	for _, scene := range meta.Scenes {
+		for _, gait := range scene.Gait {
+			if gait.Warning != "" {
+				fmt.Fprintf(stderr, "Gait warning: %s / %s: %s\n", gait.Name, scene.Action, gait.Warning)
+			}
+		}
+	}
 	return nil
 }
 
@@ -258,6 +327,11 @@ func previewSchedule(opts previewOptions, cats []previewCat) []previewScene {
 		scenes = append(scenes, s)
 		nextFrame += count
 	}
+	if opts.GaitOnly {
+		add("walk_right", "walk_right", "calm", framesPerAction)
+		add("walk_left", "walk_left", "calm", framesPerAction)
+		return scenes
+	}
 	for _, action := range []string{"idle", "walk_right", "walk_left", "pet", "drag", "play", "sleep"} {
 		mood := "calm"
 		if action == "pet" {
@@ -284,17 +358,15 @@ func previewCatPosition(column, width, height int) image.Point {
 }
 
 func previewImage(cat *previewCat) *image.RGBA {
-	frame := cat.Player.Frame()
+	return previewImageFrame(cat, cat.Player.Frame())
+}
+
+func previewImageFrame(cat *previewCat, frame AnimationFrame) *image.RGBA {
 	anchor := cat.Manifest.Anchor
 	if frame.Anchor != nil {
 		anchor = *frame.Anchor
 	}
-	var bgra []byte
-	if frame.Rect != nil {
-		bgra = cat.Atlas.FrameRectBGRA(*frame.Rect, anchor, cat.Width, cat.Height)
-	} else {
-		bgra = cat.Atlas.FrameBGRA(frame.Row, frame.Col, cat.Width, cat.Height)
-	}
+	bgra := RenderBehaviorPixels(cat.Atlas, BehaviorFrame{AnimationFrame: frame, Anchor: anchor, Action: cat.Player.Action}, cat.Width, cat.Height)
 	// image.RGBA, like the Windows DIB, stores premultiplied channels. Swap
 	// B/R directly; unpremultiplying or using NRGBA would create alpha halos.
 	im := image.NewRGBA(image.Rect(0, 0, cat.Width, cat.Height))
@@ -302,6 +374,122 @@ func previewImage(cat *previewCat) *image.RGBA {
 		im.Pix[i], im.Pix[i+1], im.Pix[i+2], im.Pix[i+3] = bgra[i+2], bgra[i+1], bgra[i], bgra[i+3]
 	}
 	return im
+}
+
+func previewMovementSource(m *AnimationManifest, action string) (*AnimationMovement, string) {
+	seen := map[string]bool{}
+	for !seen[action] {
+		seen[action] = true
+		a, ok := m.Actions[action]
+		if !ok {
+			return nil, ""
+		}
+		if a.Movement != nil {
+			return a.Movement, action
+		}
+		if a.Fallback == "" {
+			return nil, ""
+		}
+		action = a.Fallback
+	}
+	return nil, ""
+}
+
+func previewLoopHasDistinctPixels(cat *previewCat, clip AnimationClip) bool {
+	if len(clip.Loop) < 2 {
+		return false
+	}
+	first := previewImageFrame(cat, clip.Loop[0])
+	for _, frame := range clip.Loop[1:] {
+		if !bytes.Equal(first.Pix, previewImageFrame(cat, frame).Pix) {
+			return true
+		}
+	}
+	return false
+}
+
+func previewGaitInfo(cat *previewCat, action, mood string, lane, frameCount, fps int) (previewGaitSource, error) {
+	clip := cat.Manifest.Resolve(action, mood)
+	info := previewGaitSource{Name: cat.Spec.Name, Lane: lane, PixelsPerSecond: WalkPixelsPerSecond(cat.Manifest, action, mood, cat.Width), LoopFrames: len(clip.Loop), BaselineY: (lane+1)*previewGaitLane - 24}
+	info.Top = info.BaselineY - cat.Height
+	if cat.Height > previewGaitLane-40 {
+		return info, fmt.Errorf("cat %q is %dpx tall and does not fit a %dpx gait lane; reduce --width", cat.Spec.Name, cat.Height, previewGaitLane)
+	}
+	for _, frame := range clip.Loop {
+		info.CycleSeconds += float64(frame.DurationMS) / 1000
+		info.MaxSpriteHoldSeconds = math.Max(info.MaxSpriteHoldSeconds, float64(frame.DurationMS)/1000)
+	}
+	for _, frame := range clip.Start {
+		info.MaxSpriteHoldSeconds = math.Max(info.MaxSpriteHoldSeconds, float64(frame.DurationMS)/1000)
+	}
+	if !finite(info.PixelsPerSecond) || info.PixelsPerSecond < 0 {
+		return info, fmt.Errorf("cat %q has invalid application movement speed for %s", cat.Spec.Name, action)
+	}
+	movement, movementSource := previewMovementSource(cat.Manifest, action)
+	info.MovementSource = movementSource
+	info.MovementFallback = movement != nil && movementSource != action
+	hasWalk := HasWalkAnimation(cat.Manifest, action, mood)
+	info.LegacySpeedFallback = movement == nil && hasWalk
+	info.EffectiveStrideRatio = info.PixelsPerSecond * info.CycleSeconds / float64(cat.Width)
+	info.RootPixelsPerSample = info.PixelsPerSecond / float64(fps)
+	info.MaxRootTravelPerHold = info.PixelsPerSecond * info.MaxSpriteHoldSeconds
+	if movement != nil {
+		ratio := movement.StrideRatio
+		info.DeclaredStrideRatio = &ratio
+		info.Status = "trial_stride"
+		info.Calibrated = movement.Verified
+		info.Warning = "Trial stride metadata; visual paw-plant calibration has not been verified"
+		if movement.Verified {
+			info.Status = "declared_verified_stride"
+			info.Warning = "Stride verification is declared by the pack; this renderer does not independently certify anatomical gait"
+		}
+	} else {
+		info.Status = "uncalibrated_legacy_speed"
+		info.Warning = "No stride metadata; using the application's uncalibrated legacy movement speed"
+	}
+	source := previewResolvedSource(*cat, action, mood)
+	if !previewLoopHasDistinctPixels(cat, clip) {
+		info.Status = "missing_walk_animation"
+		info.Warning = "Walk loop has no distinct rendered poses"
+		info.Calibrated = false
+	} else if !hasWalk {
+		info.Status = "missing_walk_animation"
+		info.Warning = fmt.Sprintf("Walk resolves to %q without an eligible walk animation", source.ResolvedAction)
+		info.Calibrated = false
+	}
+	if info.Status == "missing_walk_animation" {
+		if info.PixelsPerSecond == 0 {
+			info.Warning += "; the application suppresses root translation"
+		} else {
+			info.Warning += "; the application still translates these distinct source references, shown for diagnosis only"
+		}
+	}
+	info.StartX = previewGaitMargin
+	direction := 1.0
+	if action == "walk_left" {
+		info.StartX = float64(previewCanvasWidth - previewGaitMargin - cat.Width)
+		direction = -1
+	}
+	info.EndX = info.StartX + direction*info.PixelsPerSecond*float64(frameCount)/float64(fps)
+	if info.EndX < previewGaitMargin || info.EndX+float64(cat.Width) > previewCanvasWidth-previewGaitMargin {
+		return info, fmt.Errorf("cat %q %s travels %.2fpx at %.2fpx/s and cannot fit the gait lane without clipping; reduce --action-duration or --width", cat.Spec.Name, action, math.Abs(info.EndX-info.StartX), info.PixelsPerSecond)
+	}
+	return info, nil
+}
+
+func previewDrawGround(canvas *image.RGBA, cats int) {
+	ground := image.NewUniform(color.RGBA{R: 169, G: 159, B: 145, A: 255})
+	separator := image.NewUniform(color.RGBA{R: 222, G: 214, B: 204, A: 255})
+	for lane := 0; lane < cats; lane++ {
+		y := (lane+1)*previewGaitLane - 24
+		draw.Draw(canvas, image.Rect(20, y, previewCanvasWidth-20, y+1), ground, image.Point{}, draw.Src)
+		for x := previewGaitMargin; x <= previewCanvasWidth-previewGaitMargin; x += 20 {
+			draw.Draw(canvas, image.Rect(x, y, x+1, y+7), ground, image.Point{}, draw.Src)
+		}
+		if lane > 0 {
+			draw.Draw(canvas, image.Rect(20, lane*previewGaitLane, previewCanvasWidth-20, lane*previewGaitLane+1), separator, image.Point{}, draw.Src)
+		}
+	}
 }
 
 func renderMotionPreview(opts previewOptions) (*previewMetadata, error) {
@@ -312,6 +500,36 @@ func renderMotionPreview(opts previewOptions) (*previewMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
+	meta := &previewMetadata{Version: 1, CanvasWidth: previewCanvasWidth, CanvasHeight: previewCanvasHeight, Background: "#f4efe7", FPS: opts.FPS, RequestedActionDurationSeconds: opts.ActionDuration.Seconds(), RequestedGazeDurationSeconds: opts.GazeDuration.Seconds(), FramePattern: previewFramePattern, FirstFrame: 0,
+		Notes: []string{"All artwork is read from the supplied private pack; no generated or demo artwork is substituted.", "Cats are rendered in place at the requested width using the application renderer; this is an animation preview, not a native Windows interaction recording.", "Scene end frames are exclusive. The gaze sweep has at least 16 frames so all directions appear.", "Each action starts at its entry phase. Declared entry frames and loops are shown; forced interruptions start the next scene without playing exit phases."}}
+	if opts.GaitOnly {
+		meta.GaitOnly = true
+		meta.CanvasHeight = previewGaitHeight
+		meta.Notes = []string{"All artwork is read from the supplied private pack; baseline and tick marks are diagnostic UI guides only.", "Cats translate at WalkPixelsPerSecond from the application, without speed adjustment, clipping, clamping, or wrapping. This is a deterministic gait review, not a native Windows recording.", "A declared stride ratio is a pack calibration claim, not proof of correct gait. Missing or static walk artwork is never marked calibrated. Legacy movement without stride metadata is uncalibrated.", "Source frames, effective anchors, animation cursors, exact positions and integer drawn positions are recorded for every sample. Ground ticks are 20px apart.", "Root movement continues while sprite poses are held, which can cause within-hold sawtooth foot drift. max_root_travel_per_sprite_hold and root_pixels_per_sample expose that sampling effect separately; perfect foot planting is not asserted.", "Gait-only CLI defaults to 20fps, matching the application's normal 50ms timer. An explicit --fps overrides the sampling rate without changing movement speed.", "Right and left scenes restart their entry phase from opposite lane ends. Scene end frames are exclusive; end_x_at_scene_boundary includes the unsampled final frame interval."}
+	}
+	meta.Scenes = previewSchedule(opts, cats)
+	if opts.GaitOnly {
+		for i := range meta.Scenes {
+			scene := &meta.Scenes[i]
+			for lane := range cats {
+				gait, err := previewGaitInfo(&cats[lane], scene.Action, scene.Mood, lane, scene.EndFrame-scene.StartFrame, opts.FPS)
+				if err != nil {
+					return nil, err
+				}
+				scene.Gait = append(scene.Gait, gait)
+			}
+		}
+	}
+	for column, cat := range cats {
+		pos := previewCatPosition(column, cat.Width, cat.Height)
+		if opts.GaitOnly {
+			gait := meta.Scenes[0].Gait[column]
+			pos = image.Pt(int(math.Round(gait.StartX)), gait.Top)
+		}
+		meta.Cats = append(meta.Cats, previewCatMetadata{Name: cat.Spec.Name, Sprite: cat.Spec.Sprite, Animations: cat.Spec.Animations, Column: column, Width: cat.Width, Height: cat.Height, Left: pos.X, Top: pos.Y})
+	}
+	meta.FrameCount = meta.Scenes[len(meta.Scenes)-1].EndFrame
+	meta.DurationSeconds = float64(meta.FrameCount) / float64(opts.FPS)
 	entries, err := os.ReadDir(opts.Out)
 	if err == nil && len(entries) != 0 {
 		return nil, errors.New("--out must be new or empty; existing files will not be overwritten")
@@ -322,28 +540,46 @@ func renderMotionPreview(opts previewOptions) (*previewMetadata, error) {
 	if err := os.MkdirAll(opts.Out, 0700); err != nil {
 		return nil, fmt.Errorf("create output directory: %w", err)
 	}
-	meta := &previewMetadata{Version: 1, CanvasWidth: previewCanvasWidth, CanvasHeight: previewCanvasHeight, Background: "#f4efe7", FPS: opts.FPS, RequestedActionDurationSeconds: opts.ActionDuration.Seconds(), RequestedGazeDurationSeconds: opts.GazeDuration.Seconds(), FramePattern: previewFramePattern, FirstFrame: 0,
-		Notes: []string{"All artwork is read from the supplied private pack; no generated or demo artwork is substituted.", "Cats are rendered in place at the requested width using the application renderer; this is an animation preview, not a native Windows interaction recording.", "Scene end frames are exclusive. The gaze sweep has at least 16 frames so all directions appear.", "Each action starts at its entry phase. Declared entry frames and loops are shown; forced interruptions start the next scene without playing exit phases."}}
-	for column, cat := range cats {
-		pos := previewCatPosition(column, cat.Width, cat.Height)
-		meta.Cats = append(meta.Cats, previewCatMetadata{Name: cat.Spec.Name, Sprite: cat.Spec.Sprite, Animations: cat.Spec.Animations, Column: column, Width: cat.Width, Height: cat.Height, Left: pos.X, Top: pos.Y})
-	}
-	meta.Scenes = previewSchedule(opts, cats)
-	meta.FrameCount = meta.Scenes[len(meta.Scenes)-1].EndFrame
-	meta.DurationSeconds = float64(meta.FrameCount) / float64(opts.FPS)
 	for _, scene := range meta.Scenes {
 		for i := range cats {
 			cats[i].Player.Play(scene.Action, scene.Mood)
 		}
 		for frame := scene.StartFrame; frame < scene.EndFrame; frame++ {
-			canvas := image.NewRGBA(image.Rect(0, 0, previewCanvasWidth, previewCanvasHeight))
+			canvas := image.NewRGBA(image.Rect(0, 0, meta.CanvasWidth, meta.CanvasHeight))
 			draw.Draw(canvas, canvas.Bounds(), image.NewUniform(previewBackground), image.Point{}, draw.Src)
+			positions := previewFramePositions{Frame: frame, Seconds: float64(frame) / float64(opts.FPS), SceneSeconds: float64(frame-scene.StartFrame) / float64(opts.FPS), Action: scene.Action}
+			if opts.GaitOnly {
+				previewDrawGround(canvas, len(cats))
+			}
 			for column := range cats {
 				cat := &cats[column]
 				im := previewImage(cat)
 				pos := previewCatPosition(column, cat.Width, cat.Height)
+				if opts.GaitOnly {
+					gait := scene.Gait[column]
+					direction := 1.0
+					if scene.Action == "walk_left" {
+						direction = -1
+					}
+					x := gait.StartX + direction*gait.PixelsPerSecond*positions.SceneSeconds
+					pos = image.Pt(int(math.Round(x)), gait.Top)
+					sourceFrame := cat.Player.Frame()
+					anchor := cat.Manifest.Anchor
+					if sourceFrame.Anchor != nil {
+						anchor = *sourceFrame.Anchor
+					}
+					var transform *SpriteTransform
+					if sourceFrame.Rect != nil {
+						t := FrameRectTransform(*sourceFrame.Rect, anchor, cat.Width, cat.Height, scene.Action != "drag")
+						transform = &t
+					}
+					positions.Cats = append(positions.Cats, previewFramePosition{Name: cat.Spec.Name, Lane: column, X: x, Y: pos.Y, RenderedX: pos.X, RenderedY: pos.Y, Phase: cat.Player.Phase, AnimationIndex: cat.Player.Index, ElapsedMS: cat.Player.ElapsedMS, SourceFrame: sourceFrame, Anchor: anchor, Transform: transform})
+				}
 				draw.Draw(canvas, im.Bounds().Add(pos), im, im.Bounds().Min, draw.Over)
 				cat.Player.Tick(1 / float64(opts.FPS))
+			}
+			if opts.GaitOnly {
+				meta.Frames = append(meta.Frames, positions)
 			}
 			path := filepath.Join(opts.Out, fmt.Sprintf(previewFramePattern, frame))
 			if err := writePreviewPNG(path, canvas); err != nil {

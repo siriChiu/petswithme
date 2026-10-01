@@ -106,3 +106,15 @@ Default scenes cover idle, both walks, pet, drag, play, sleep and a gaze sweep.
 Missing actions retain their explicitly reported fallback chain; a preview is not
 proof that bespoke art exists for every action. Preview metadata may include private
 names and local paths, so keep it with the private pack.
+
+For walking review with visible ground ticks and real application translation:
+
+```
+go run -tags motionpreview . --root /path/to/private-pack --out /path/to/empty-gait --gait-only
+```
+
+This defaults to 20fps, one lane per character. Metadata includes exact and
+rounded root positions, source frame indices, declared stride calibration, and
+within-pose hold travel. Missing/static walk aliases stay still; anatomical gait
+and likeness still need visual review. Do not calibrate a bad source loop merely
+to make format tests green.

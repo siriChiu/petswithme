@@ -67,3 +67,38 @@ it immediately. Anchor defaults should normally be bottom-center for feet.
 Approve each cat's identity first, then draw action families using that approved
 reference. Never infer three unique cats from one demo atlas. Keep photos, names,
 unapproved previews, and finished private artwork out of the public repository.
+
+## Walking calibration
+
+A real walk action may include `"movement":{"strideRatio":0.3}`. The ratio is
+**full rendered canvas widths travelled per complete loop**, measured from the
+corrected source art's planted-paw trajectory; it is not a speed guessed from
+appearance. The engine computes pixels/second from canvas width × strideRatio ÷
+loop duration, so frame timing changes and display scaling stay coupled.
+
+Without explicit calibration, genuine multi-frame walking keeps the conservative
+legacy speed and is reported as uncalibrated by the preview tool. Missing,
+single-pose, or known idle/sit/sleep fallback walks do not move the cat. Distinct
+frame references alone cannot prove anatomical gait quality: review contact,
+passing, lift-off, swing, and loop closure, anchored by shoulders/hips rather than
+a changing tail silhouette. Report sampled planted-paw drift separately from the
+within-frame hold jitter of sprite animation. Never call a near-static loop a
+validated walk just because format checks pass.
+
+`movement.verified` defaults to false. A trial stride may be rendered without
+claiming it is calibrated. Set verified=true only after separate planted-paw
+review; the renderer reports the declaration and does not independently certify
+anatomical gait.
+
+## Ground contact and transparent padding
+
+For custom-rectangle actions other than drag, the source anchor is a reference
+point mapped to the bottom-center of the pet window. It is not merely a
+letterboxing preference. Set its y to the shared source contact plane after
+hip/shoulder registration, so transparent padding does not make pets hover.
+Intentional airborne motion retains that same ground reference; do not recenter
+every jump or stance frame. Drag preserves its full canvas to protect dangling
+tails. Validation rejects ground alignment that would clip visible pixels.
+The same composition and recorded source-to-window transform are used in the
+native app and motion previews. Keep explanatory notes in separate QA files;
+unknown manifest fields are rejected.
