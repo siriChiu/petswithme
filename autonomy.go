@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"strconv"
 	"strings"
 )
 
@@ -326,12 +327,7 @@ func (e *BehaviorEngine) tickAutonomy(i int, now, dt, cursorX, cursorY float64) 
 	}
 	return s.Action
 }
-func itoaDirection(i int) string {
-	if i < 10 {
-		return string(rune('0' + i))
-	}
-	return "1" + string(rune('0'+i-10))
-}
+func itoaDirection(i int) string { return strconv.Itoa(i) }
 
 func (e *BehaviorEngine) configureSocial() {
 	e.Social.GreetingDuration = func(i int) float64 { s := e.States[i]; return actionCycle(s.Player.Manifest, "greet", s.Mood) }

@@ -48,30 +48,36 @@ func TestWindowsGazeSweepRendersWithoutFocus(t *testing.T) {
 	app.Frames = map[string][]byte{}
 	app.CachedBytes = 0
 	defer func() { app.Frames = oldFrames; app.CachedBytes = oldBytes }()
-	im := image.NewNRGBA(image.Rect(0, 0, 64, 88))
-	for d := 0; d < 16; d++ {
+	im := image.NewNRGBA(image.Rect(0, 0, 256, 8))
+	for d := 0; d < 32; d++ {
 		for y := 2; y < 6; y++ {
 			for x := 2; x < 6; x++ {
-				im.SetNRGBA((d%8)*8+x, (9+d/8)*8+y, color.NRGBA{R: uint8(32 + d*10), G: 120, B: 80, A: 255})
+				im.SetNRGBA(d*8+x, y, color.NRGBA{R: uint8(32 + d*6), G: 120, B: 80, A: 255})
 			}
 		}
 	}
 	e := gazeFixture()
+	m := &AnimationManifest{SchemaVersion: 1, GazeDirections: 32, Fallback: "idle", Anchor: AnimationAnchor{.5, 1}, Actions: map[string]AnimationAction{}}
+	for d := 0; d < 32; d++ {
+		m.Actions["gaze_"+itoaDirection(d)] = AnimationAction{AnimationClip: AnimationClip{Loop: []AnimationFrame{{Rect: &FrameRect{d * 8, 0, 8, 8}, DurationMS: 200}}}}
+	}
+	m.Actions["idle"] = m.Actions["gaze_0"]
+	e.SetManifest(0, m)
 	c := e.Cats[0]
 	c.X, c.Y = float64(f.x), float64(f.y)
 	c.W, c.H = smokeWidth, smokeHeight
 	pet := &PetWindow{HWND: f.pet, Cat: c, Atlas: &Atlas{Image: im, CellW: 8, CellH: 8}, Manifest: e.Manifest}
 	defer pet.DIB.Close()
 	ox, oy := GazeOrigin(c)
-	for d := 0; d < 16; d++ {
-		a := float64(d) * math.Pi / 8
+	for d := 0; d < 32; d++ {
+		a := float64(d) * math.Pi / 16
 		frame := e.Tick(float64(d), .05, ox+1000*math.Sin(a), oy-1000*math.Cos(a), 0, true)[0]
 		if err := renderFrame(pet, frame); err != nil {
 			t.Fatal(err)
 		}
 		pixels := unsafe.Slice((*byte)(pet.DIB.Bits), smokeWidth*smokeHeight*4)
 		center := (smokeHeight/2*smokeWidth + smokeWidth/2) * 4
-		if pixels[center+2] != uint8(32+d*10) {
+		if pixels[center+2] != uint8(32+d*6) {
 			t.Fatalf("direction%d did not reach native DIB", d)
 		}
 	}
@@ -79,5 +85,5 @@ func TestWindowsGazeSweepRendersWithoutFocus(t *testing.T) {
 	if fg == f.pet || fg == f.probe {
 		t.Fatal("gaze stole focus")
 	}
-	t.Log("Gaze sweep: all 16 engine directions rendered through the real layered window; no cursor injection or focus steal")
+	t.Log("Gaze sweep: all 32 engine directions rendered through the real layered window; no cursor injection or focus steal")
 }

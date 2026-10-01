@@ -68,7 +68,7 @@ func previewCapabilityReport(cat previewCat) previewCapabilities {
 		report.Actions = append(report.Actions, previewActionCapability{action, authored, eligible, len(pixels), previewSequenceMS(clip.Start), previewSequenceMS(clip.Loop), previewSequenceMS(clip.End), previewResolvedSource(cat, action, mood)})
 	}
 	pixels := map[[32]byte]bool{}
-	for d := 0; d < 16; d++ {
+	for d := 0; d < ManifestGazeDirections(cat.Manifest); d++ {
 		name := "gaze_" + itoaDirection(d)
 		a, exists := cat.Manifest.Actions[name]
 		if !HasAuthoredAction(cat.Manifest, name, "calm") {

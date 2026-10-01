@@ -155,6 +155,8 @@ var app struct {
 	Settings                          Settings
 	SettingsPath, Folder              string
 	Hidden, Quitting                  bool
+	ClickThrough                      bool
+	ClickThroughUntil, TrayLastClick  float64
 	Start                             time.Time
 	LastTime, LastIdleCheck, Idle     float64
 }
@@ -264,25 +266,19 @@ func renderFrame(p *PetWindow, frame BehaviorFrame) error {
 }
 func nowSeconds() float64 { return time.Since(app.Start).Seconds() }
 func setInterval() {
-	ms := uintptr(50)
-	if app.Engine != nil && app.Engine.Load != nil && app.Engine.Load.Active {
-		ms = 100
-	}
-	if app.Settings.Quiet {
-		ms = 250
-	}
+	dragging := false
 	for _, p := range app.Pets {
-		if p.Down {
-			ms = 16
-			break
-		}
+		dragging = dragging || p.Down
 	}
-	if app.Hidden {
+	busy := app.Engine != nil && app.Engine.Load != nil && app.Engine.Load.Active
+	ms := RenderIntervalMS(app.Settings, busy, dragging, app.Hidden)
+	if ms == 0 {
 		killTimer.Call(app.Controller, 1)
 		return
 	}
-	setTimer.Call(app.Controller, 1, ms, 0)
+	setTimer.Call(app.Controller, 1, uintptr(ms), 0)
 }
+
 func save() {
 	if e := SaveSettings(app.SettingsPath, app.Settings); e != nil { /* Preferences are optional; the app still works in a restricted profile. */
 	}
@@ -330,6 +326,7 @@ func reset() {
 	setInterval()
 }
 func toggleHidden() {
+	expireClickThrough(nowSeconds())
 	resetCPUMonitor()
 	app.Hidden = !app.Hidden
 	for _, p := range app.Pets {
@@ -347,6 +344,10 @@ func tick() {
 		return
 	}
 	now := nowSeconds()
+	expireClickThrough(now)
+	if app.Hidden {
+		return
+	}
 	dt := math.Min(.2, now-app.LastTime)
 	app.LastTime = now
 	p, cursorValid := readCurrentCursor()
@@ -392,7 +393,7 @@ func tick() {
 }
 func addTray() bool {
 	app.Tray = NotifyData{Size: uint32(unsafe.Sizeof(NotifyData{})), HWND: app.Controller, ID: 1, Flags: 1 | 2 | 4, Callback: wmTray, Icon: app.Icon}
-	copy(app.Tray.Tip[:], syscall.StringToUTF16("三貓桌面陪伴 · 測試版\n右鍵：顯示、安靜、結束"))
+	copy(app.Tray.Tip[:], syscall.StringToUTF16("三貓桌面陪伴 · 單擊顯示／隱藏，右鍵設定"))
 	ok, _, _ := notifyIcon.Call(0, uintptr(unsafe.Pointer(&app.Tray)))
 	return ok != 0
 }
@@ -414,6 +415,8 @@ func menu() {
 		label = "顯示貓咪"
 	}
 	add(100, label, false)
+	add(110, "設定：大小／活動／CPU", false)
+	add(111, "暫時整隻點穿（5分鐘，從圖示可恢復）", app.ClickThrough)
 	add(101, "安靜（停止自主活動）", app.Settings.Activity == ActivityQuiet)
 	add(106, "一般活動", app.Settings.Activity == ActivityNormal)
 	add(107, "活潑（更常探索與互動）", app.Settings.Activity == ActivityLively)
@@ -477,6 +480,14 @@ func command(id int) {
 		}
 		save()
 		tick()
+	case 110:
+		if err := openNativeSettings(app.Settings, applyAppSettings); err != nil {
+			showError(err.Error())
+		}
+	case 111:
+		if err := setClickThrough(!app.ClickThrough); err != nil {
+			showError(err.Error())
+		}
 	case 102:
 		reset()
 	case 105:
@@ -512,6 +523,7 @@ func quit() {
 		return
 	}
 	app.Quitting = true
+	closeNativeSettings()
 	killTimer.Call(app.Controller, 1)
 	notifyIcon.Call(2, uintptr(unsafe.Pointer(&app.Tray)))
 	for _, p := range app.Pets {
@@ -547,8 +559,12 @@ func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 			switch uint32(lp) {
 			case 0x0205, 0x007B:
 				menu()
-			case 0x0203:
-				toggleHidden()
+			case 0x0202:
+				now := nowSeconds()
+				if app.TrayLastClick == 0 || now-app.TrayLastClick >= .35 {
+					app.TrayLastClick = now
+					toggleHidden()
+				}
 			}
 			return 0
 		case wmWake:
@@ -582,6 +598,9 @@ func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		case 0x0021:
 			return 3 // MA_NOACTIVATE: never steal typing focus.
 		case 0x0084:
+			if app.ClickThrough {
+				return ^uintptr(0)
+			}
 			return 1 // Native layered-window alpha hit testing excludes zero-alpha pixels.
 		case 0x0201:
 			q := currentCursor()
@@ -868,6 +887,9 @@ func main() {
 		}
 		if ret == 0 {
 			break
+		}
+		if nativeSettingsMessage(&msg) {
+			continue
 		}
 		translateMessage.Call(uintptr(unsafe.Pointer(&msg)))
 		dispatchMessage.Call(uintptr(unsafe.Pointer(&msg)))

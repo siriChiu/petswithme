@@ -205,3 +205,22 @@ versus fallback capabilities. It counts distinct rendered gaze drawings separate
 from usable direction aliases. These pixel/reference checks do not certify pose
 anatomy or likeness; visual review is still required. Keep the report private when
 it contains private names or asset paths.
+
+## Work-friendly controls
+
+Single-click the notification-area icon to hide/show the cats. Right-click it
+for Settings or temporary whole-pet click-through. Click-through automatically
+ends after five minutes, can be ended immediately from that same tray menu, and
+is never persisted across restarts. Transparent margins retain normal per-pixel
+click-through when this temporary mode is off.
+
+The native Settings window adjusts size, activity and CPU thresholds/timing.
+Invalid ranges or an exit threshold above the entry threshold are rejected;
+Cancel leaves preferences unchanged. Applying saves locally, then updates the
+existing engine. The dialog is an explicitly opened normal window; pet windows
+remain nonactivating. No global keyboard shortcut or key monitoring is installed.
+
+The app retains its low-resource 50ms normal timer, 100ms busy timer, 250ms quiet
+timer and 16ms drag timer. Additional genuine animation poses subdivide existing
+clip durations rather than speeding up playback. A higher repaint rate is not a
+substitute for extra authored drawings.

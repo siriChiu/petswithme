@@ -548,3 +548,28 @@ func TestPreviewCustomActionsValidation(t *testing.T) {
 		t.Fatal("accepted conflicting modes")
 	}
 }
+
+func TestPreviewMixedGazeCountsUseSameScreenAngle(t *testing.T) {
+	cats, err := loadPreviewCats(previewTestPack(t), 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, count := range []int{32, 16, 4} {
+		m := &AnimationManifest{SchemaVersion: 1, Fallback: "idle", GazeDirections: count, Actions: map[string]AnimationAction{"idle": cats[i].Manifest.Actions["idle"]}}
+		for d := 0; d < count; d++ {
+			m.Actions["gaze_"+itoaDirection(d)] = AnimationAction{AnimationClip: AnimationClip{Loop: []AnimationFrame{{Rect: &FrameRect{0, 0, 8, 8}, DurationMS: 200}}}}
+		}
+		cats[i].Manifest = m
+	}
+	opts := previewOptions{FPS: 20, ActionDuration: time.Second, GazeDuration: time.Second}
+	scenes := previewSchedule(opts, cats)
+	if len(scenes) != 39 {
+		t.Fatalf("directions dropped:%d", len(scenes))
+	}
+	right := scenes[7+8]
+	for i, want := range []string{"gaze_8", "gaze_4", "gaze_1"} {
+		if got := previewActionForCat(cats[i], right); got != want {
+			t.Fatalf("cat%d right became%s", i, got)
+		}
+	}
+}

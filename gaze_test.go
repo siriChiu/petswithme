@@ -123,3 +123,38 @@ func TestGazeOriginPreservesHeadWhenCanvasPaddingChanges(t *testing.T) {
 		}
 	}
 }
+
+func TestGazeVariableCountsAndBackwardCompatibility(t *testing.T) {
+	for _, count := range []int{4, 8, 16, 32} {
+		e := gazeFixture()
+		m := e.Manifest
+		m.GazeDirections = count
+		for d := 0; d < count; d++ {
+			m.Actions["gaze_"+itoaDirection(d)] = AnimationAction{AnimationClip: AnimationClip{Loop: []AnimationFrame{{Rect: &FrameRect{d * 8, 0, 8, 8}, DurationMS: 200}}}}
+		}
+		if err := m.Validate(256, 88); err != nil {
+			t.Fatal(err)
+		}
+		ox, oy := ManifestGazeOrigin(e.Cats[0], m)
+		for d := 0; d < count; d++ {
+			a := float64(d) * 2 * math.Pi / float64(count)
+			f := e.Tick(float64(d), .05, ox+1000*math.Sin(a), oy-1000*math.Cos(a), 0, true)[0]
+			if f.Action != "gaze_"+itoaDirection(d) || f.Rect.X != d*8 {
+				t.Fatalf("count%d direction%d:%+v", count, d, f)
+			}
+		}
+	}
+	m := DefaultAnimationManifest()
+	if ManifestGazeDirections(m) != 16 {
+		t.Fatal("old manifests changed meaning")
+	}
+	for _, bad := range []int{-1, 2, 17, 64} {
+		m.GazeDirections = bad
+		if m.Validate(1024, 1408) == nil {
+			t.Fatalf("bad count%d accepted", bad)
+		}
+	}
+	if GazeDirectionCount(1, 0, 32) != 8 || GazeDirectionCount(0, 1, 32) != 16 || GazeDirectionCount(-1, 0, 32) != 24 {
+		t.Fatal("32 cardinal mapping incorrect")
+	}
+}

@@ -40,12 +40,16 @@ func FitSize(w, h int, r Rect) (int, int) {
 	ratio := math.Min(1, math.Min(float64(max(1, r.Width()))/float64(w), float64(max(1, r.Height()))/float64(h)))
 	return max(1, int(float64(w)*ratio)), max(1, int(float64(h)*ratio))
 }
-func GazeDirection(dx, dy float64) int {
+func GazeDirection(dx, dy float64) int { return GazeDirectionCount(dx, dy, 16) }
+func GazeDirectionCount(dx, dy float64, count int) int {
+	if count != 4 && count != 8 && count != 16 && count != 32 {
+		count = 16
+	}
 	a := math.Atan2(dx, -dy)
 	if a < 0 {
 		a += 2 * math.Pi
 	}
-	return int(math.Round(a/(math.Pi/8))) % 16
+	return int(math.Round(a/(2*math.Pi/float64(count)))) % count
 }
 
 type CatSpec struct {

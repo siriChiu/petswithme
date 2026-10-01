@@ -304,6 +304,39 @@ func lifecycleDrive(ctx context.Context) (err error) {
 	if err = lifecycleWait(ctx, "experimental movement disabled", func() bool { return experimentalIs(false) }); err != nil {
 		return err
 	}
+	// Drive the actual native Settings form in this isolated real-app process.
+	if err = postCommand(110); err != nil {
+		return err
+	}
+	var settingsHWND uintptr
+	if err = lifecycleWait(ctx, "native Settings window", func() bool {
+		settingsHWND, _, _ = findWindow.Call(uintptr(unsafe.Pointer(utf("ThreeCatCompanionSettings"))), 0)
+		return lifecycleOwnWindow(settingsHWND)
+	}); err != nil {
+		return err
+	}
+	getItem := user32.NewProc("GetDlgItem")
+	field := func(id int) uintptr { h, _, _ := getItem.Call(settingsHWND, uintptr(id)); return h }
+	for id, value := range map[int]string{13: "82", 14: "45"} {
+		h := field(id)
+		if h == 0 {
+			return fmt.Errorf("missing native setting field%d", id)
+		}
+		settingsSetText.Call(h, uintptr(unsafe.Pointer(utf(value))))
+	}
+	settingsSend.Call(field(10), 0x14e, 2, 0)
+	settingsSend.Call(field(11), 0x14e, 1, 0)
+	settingsSend.Call(field(1), 0xf5, 0, 0)
+	if err = lifecycleWait(ctx, "native Settings applied and saved", func() bool {
+		data, err := os.ReadFile(settingsPath)
+		if err != nil {
+			return false
+		}
+		var s Settings
+		return json.Unmarshal(data, &s) == nil && s.Size == 192 && s.CPU.EnterPercent == 82 && s.CPU.ExitPercent == 45
+	}); err != nil {
+		return err
+	}
 	if err = postCommand(105); err != nil {
 		return err
 	} // Play all three.
@@ -372,5 +405,5 @@ func TestWindowsAppLifecycleHelper(t *testing.T) {
 	if exists, _, _ := smokeIsWindow.Call(app.Controller); exists != 0 {
 		t.Fatal("controller survived main return")
 	}
-	t.Log("REAL_APP_LIFECYCLE_PASSED: real main, tray setup, three synthetic pets, experimental movement toggle/CPU toggle/quiet/normal/lively/hide/show/reset/play/size/quit, isolated settings, window and DIB cleanup")
+	t.Log("REAL_APP_LIFECYCLE_PASSED: real main, tray setup, three synthetic pets, native Settings apply/experimental movement toggle/CPU toggle/quiet/normal/lively/hide/show/reset/play/size/quit, isolated settings, window and DIB cleanup")
 }

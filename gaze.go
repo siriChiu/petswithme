@@ -18,8 +18,15 @@ func ManifestGazeOrigin(c *Cat, m *AnimationManifest) (float64, float64) {
 	return GazeOrigin(c)
 }
 
+func ManifestGazeDirections(m *AnimationManifest) int {
+	if m != nil && (m.GazeDirections == 4 || m.GazeDirections == 8 || m.GazeDirections == 32) {
+		return m.GazeDirections
+	}
+	return 16
+}
+
 func hasGazeArtwork(m *AnimationManifest, mood string) bool {
-	for direction := 0; direction < 16; direction++ {
+	for direction := 0; direction < ManifestGazeDirections(m); direction++ {
 		if HasAuthoredAction(m, "gaze_"+itoaDirection(direction), mood) {
 			return true
 		}
@@ -35,12 +42,13 @@ func (e *BehaviorEngine) pointerGaze(i int, cursorX, cursorY float64) string {
 		s.GazeActive = false
 		return "idle"
 	}
-	direction := GazeDirection(dx, dy)
-	// Retain the previous sector for an extra 3.375 degrees at a boundary.
+	count := ManifestGazeDirections(s.Player.Manifest)
+	direction := GazeDirectionCount(dx, dy, count)
+	// Retain the previous sector for an extra 15% of a sector at a boundary.
 	// This prevents pixel-scale cursor tremor from flashing between poses.
 	if s.GazeActive {
-		sector := math.Atan2(dx, -dy) * 8 / math.Pi
-		delta := math.Mod(sector-float64(s.GazeDirection)+24, 16) - 8
+		sector := math.Atan2(dx, -dy) * float64(count) / (2 * math.Pi)
+		delta := math.Mod(sector-float64(s.GazeDirection)+float64(count)*1.5, float64(count)) - float64(count)/2
 		if math.Abs(delta) <= .65 {
 			direction = s.GazeDirection
 		}

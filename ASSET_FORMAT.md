@@ -150,3 +150,13 @@ it preserves the original center-x/30%-height behavior. This point is independen
 of the floor anchor. Review the real idle-to-action transition after any canvas
 change, including gaze directions close to the face; do not fit each silhouette
 independently or silently shrink the character to fit a cell.
+
+A top-level `gazeDirections` may be 4, 8, 16 or 32. Omitted/zero means 16 for
+backward compatibility, including older four-cardinal packs with sixteen aliases.
+Within the declared count, `gaze_0` starts at up and indices proceed clockwise in
+`360/count` degree increments. For 32: up=0, right=8, down=16, left=24. Merely
+changing this number does not create art: missing indices still fall back, and
+capability reports count genuine distinct rendered drawings separately. Existing
+16-direction art can be retained at even indices when real generated intermediate
+poses are added at odd indices. The mixed-pack preview uses the same screen angle
+for cats with different counts.

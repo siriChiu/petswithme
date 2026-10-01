@@ -20,6 +20,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -78,16 +79,17 @@ type previewActionSource struct {
 }
 
 type previewScene struct {
-	Scene        string                `json:"scene"`
-	Action       string                `json:"action"`
-	Mood         string                `json:"mood"`
-	StartFrame   int                   `json:"start_frame"`
-	EndFrame     int                   `json:"end_frame_exclusive"`
-	StartSeconds float64               `json:"start_seconds"`
-	EndSeconds   float64               `json:"end_seconds"`
-	Sources      []previewActionSource `json:"sources"`
-	Gait         []previewGaitSource   `json:"gait,omitempty"`
-	StopFrame    int                   `json:"stop_frame,omitempty"`
+	Scene          string                `json:"scene"`
+	Action         string                `json:"action"`
+	Mood           string                `json:"mood"`
+	StartFrame     int                   `json:"start_frame"`
+	EndFrame       int                   `json:"end_frame_exclusive"`
+	StartSeconds   float64               `json:"start_seconds"`
+	EndSeconds     float64               `json:"end_seconds"`
+	Sources        []previewActionSource `json:"sources"`
+	Gait           []previewGaitSource   `json:"gait,omitempty"`
+	GazeDirections int                   `json:"gaze_directions,omitempty"`
+	StopFrame      int                   `json:"stop_frame,omitempty"`
 }
 
 type previewGaitSource struct {
@@ -406,12 +408,35 @@ func previewSchedule(opts previewOptions, cats []previewCat) []previewScene {
 	}
 	// At low FPS or short durations, extend only this sweep so that no direction
 	// is silently dropped. Metadata records the exact frame-aligned schedule.
-	gazeFrames := max(16, int(math.Ceil(opts.GazeDuration.Seconds()*float64(opts.FPS))))
-	for direction := 0; direction < 16; direction++ {
-		count := (direction+1)*gazeFrames/16 - direction*gazeFrames/16
-		add("gaze", fmt.Sprintf("gaze_%d", direction), "calm", count)
+	gazeCount := 16
+	for _, cat := range cats {
+		gazeCount = max(gazeCount, ManifestGazeDirections(cat.Manifest))
 	}
+	gazeFrames := max(gazeCount, int(math.Ceil(opts.GazeDuration.Seconds()*float64(opts.FPS))))
+	for direction := 0; direction < gazeCount; direction++ {
+		count := (direction+1)*gazeFrames/gazeCount - direction*gazeFrames/gazeCount
+		add("gaze", fmt.Sprintf("gaze_%d", direction), "calm", count)
+		scene := &scenes[len(scenes)-1]
+		scene.GazeDirections = gazeCount
+		scene.Sources = nil
+		for _, cat := range cats {
+			scene.Sources = append(scene.Sources, previewActionForSource(cat, *scene))
+		}
+	}
+
 	return scenes
+}
+
+func previewActionForCat(cat previewCat, scene previewScene) string {
+	if scene.GazeDirections == 0 {
+		return scene.Action
+	}
+	d, _ := strconv.Atoi(strings.TrimPrefix(scene.Action, "gaze_"))
+	count := ManifestGazeDirections(cat.Manifest)
+	return "gaze_" + strconv.Itoa(int(math.Round(float64(d)*float64(count)/float64(scene.GazeDirections)))%count)
+}
+func previewActionForSource(cat previewCat, scene previewScene) previewActionSource {
+	return previewResolvedSource(cat, previewActionForCat(cat, scene), scene.Mood)
 }
 
 func previewCatPosition(column, width, height int) image.Point {
@@ -627,7 +652,7 @@ func renderMotionPreview(opts previewOptions) (*previewMetadata, error) {
 	}
 	for _, scene := range meta.Scenes {
 		for i := range cats {
-			cats[i].Player.Play(scene.Action, scene.Mood)
+			cats[i].Player.Play(previewActionForCat(cats[i], scene), scene.Mood)
 		}
 		for frame := scene.StartFrame; frame < scene.EndFrame; frame++ {
 			canvas := image.NewRGBA(image.Rect(0, 0, meta.CanvasWidth, meta.CanvasHeight))
