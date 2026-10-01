@@ -362,3 +362,32 @@ func TestExperimentalSettingRemembersExplicitOff(t *testing.T) {
 		t.Fatal("public default opted in")
 	}
 }
+
+func TestExperimentalMotionSpeedOverrideDoesNotFakeCalibrationOrChangeTiming(t *testing.T) {
+	m := fullCapabilityFixture()
+	a := m.Actions["run_right"]
+	a.Movement.Verified = false
+	a.Movement.TrialSpeedRatio = .16
+	m.Actions["run_right"] = a
+	e := NewBehaviorEngine(behaviorCats(1), m)
+	before := actionCycle(m, "run_right", "calm")
+	if e.movementSpeed(0, "run_right") != 0 {
+		t.Fatal("trial bypassed opt-in")
+	}
+	e.SetExperimentalMovement(true)
+	if e.movementSpeed(0, "run_right") != 16 || HasRunAnimation(m, "run_right", "calm") || actionCycle(m, "run_right", "calm") != before {
+		t.Fatal("speed setting altered calibration/timing")
+	}
+	a.Movement.Verified = true
+	m.Actions["run_right"] = a
+	if e.movementSpeed(0, "run_right") == 16 {
+		t.Fatal("trial speed overrode verified stride")
+	}
+	for _, v := range []float64{-.1, .01, .51, math.Inf(1)} {
+		a.Movement.TrialSpeedRatio = v
+		m.Actions["run_right"] = a
+		if m.Validate(1024, 1408) == nil {
+			t.Fatalf("bad trial speed%g accepted", v)
+		}
+	}
+}

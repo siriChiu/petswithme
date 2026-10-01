@@ -160,3 +160,24 @@ capability reports count genuine distinct rendered drawings separately. Existing
 16-direction art can be retained at even indices when real generated intermediate
 poses are added at odd indices. The mixed-pack preview uses the same screen angle
 for cats with different counts.
+
+## Lossless transparent-margin packing
+
+A custom-rectangle frame may include a logical canvas:
+`"canvas":{"width":320,"height":288,"offsetX":64,"offsetY":80}`.
+The stored `rect` contains only the cropped source pixels; offsetX/Y restore its
+position within the original logical canvas. Logical sizes are bounded to
+1–4096 and the crop must fit completely inside it. Rendering, anchors, gaze
+origins and pet-window dimensions use the logical canvas, not the packed crop.
+Alpha pixels, nearest-neighbor sampling and animation timing remain identical.
+This allows denser generated pose sets without increasing the 8MP decoded-image
+cap, reducing character size, or discarding genuine frames. Strip every fully
+transparent margin only after preserving the complete generated silhouette.
+
+For explicitly enabled uncalibrated trial runs, optional movement
+`trialSpeedRatio` (0.05–0.5 canvas widths per second) replaces the conservative
+0.23 default. It affects only root travel, never pose duration or the verified
+flag. This permits normal/slow real-engine comparisons while revising generated
+gaits. Verified stride calibration always takes precedence. A trial speed is not
+proof of planted paws or a natural gait, and unverified running still requires
+the user's experimental-movement opt-in.

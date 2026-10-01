@@ -501,7 +501,7 @@ func previewGaitInfo(cat *previewCat, action, mood string, lane, frameCount, fps
 	info := previewGaitSource{Name: cat.Spec.Name, Lane: lane, PixelsPerSecond: WalkPixelsPerSecond(cat.Manifest, action, mood, cat.Width), LoopFrames: len(clip.Loop), BaselineY: (lane+1)*previewGaitLane - 24}
 	experimental := cat.ExperimentalMovement && strings.HasPrefix(action, "run_") && !HasRunAnimation(cat.Manifest, action, mood) && HasRunArtwork(cat.Manifest, action, mood)
 	if experimental {
-		info.PixelsPerSecond = float64(cat.Width) * .23
+		info.PixelsPerSecond = ExperimentalRunPixelsPerSecond(cat.Manifest, action, cat.Width)
 	}
 	info.Top = info.BaselineY - cat.Height
 	if cat.Height > previewGaitLane-40 {
@@ -685,7 +685,7 @@ func renderMotionPreview(opts previewOptions) (*previewMetadata, error) {
 					}
 					var transform *SpriteTransform
 					if sourceFrame.Rect != nil {
-						t := FrameRectTransform(*sourceFrame.Rect, anchor, cat.Width, cat.Height, scene.Action != "drag")
+						t := AnimationFrameTransform(sourceFrame, anchor, cat.Width, cat.Height, scene.Action != "drag")
 						transform = &t
 					}
 					rootX := float64(pos.X)

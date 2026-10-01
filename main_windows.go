@@ -229,7 +229,7 @@ func (d *DIB) Resize(w, h int) error {
 func renderFrame(p *PetWindow, frame BehaviorFrame) error {
 	c := p.Cat
 	x, y := int(math.Round(c.X)), int(math.Round(c.Y))
-	key := fmt.Sprintf("%t:%p:%d:%d:%v:%g:%g:%d:%d", frame.Action == "drag", p.Atlas, frame.Row, frame.Col, frame.Rect, frame.Anchor.X, frame.Anchor.Y, c.W, c.H)
+	key := fmt.Sprintf("%t:%p:%d:%d:%v:%v:%g:%g:%d:%d", frame.Action == "drag", p.Atlas, frame.Row, frame.Col, frame.Rect, frame.Canvas, frame.Anchor.X, frame.Anchor.Y, c.W, c.H)
 	if key == p.LastKey && x == p.LastX && y == p.LastY {
 		return nil
 	}

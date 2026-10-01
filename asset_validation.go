@@ -76,11 +76,16 @@ func ValidateManifestPixels(m *AnimationManifest, a *Atlas) error {
 						if frame.Anchor != nil {
 							anchor = *frame.Anchor
 						}
-						t := FrameRectTransform(rect, anchor, canvasW, canvasH, true)
-						left := float64(st.minX*t.ScaledW)/float64(rect.W) + float64(t.OffsetX)
-						right := float64(st.maxX*t.ScaledW)/float64(rect.W) + float64(t.OffsetX)
-						top := float64(st.minY*t.ScaledH)/float64(rect.H) + float64(t.OffsetY)
-						bottom := float64(st.maxY*t.ScaledH)/float64(rect.H) + float64(t.OffsetY)
+						t := AnimationFrameTransform(frame, anchor, canvasW, canvasH, true)
+						logical := FrameLogicalRect(frame)
+						cx, cy := 0, 0
+						if frame.Canvas != nil {
+							cx, cy = frame.Canvas.X, frame.Canvas.Y
+						}
+						left := float64((st.minX+cx)*t.ScaledW)/float64(logical.W) + float64(t.OffsetX)
+						right := float64((st.maxX+cx)*t.ScaledW)/float64(logical.W) + float64(t.OffsetX)
+						top := float64((st.minY+cy)*t.ScaledH)/float64(logical.H) + float64(t.OffsetY)
+						bottom := float64((st.maxY+cy)*t.ScaledH)/float64(logical.H) + float64(t.OffsetY)
 						if left < 0 || top < 0 || right > float64(canvasW) || bottom > float64(canvasH) {
 							return fmt.Errorf("action %q frame %d would clip visible pixels when its ground anchor is aligned; correct its anchor or registration", name, i)
 						}

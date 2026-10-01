@@ -32,7 +32,18 @@ type FrameRect struct {
 	W int `json:"w"`
 	H int `json:"h"`
 }
+
+// FrameCanvas preserves the original transparent logical canvas when only its
+// nontransparent bounds are stored in the PNG. No artwork is scaled or warped.
+type FrameCanvas struct {
+	W int `json:"width"`
+	H int `json:"height"`
+	X int `json:"offsetX"`
+	Y int `json:"offsetY"`
+}
 type AnimationFrame struct {
+	Canvas *FrameCanvas `json:"canvas,omitempty"`
+
 	Row        int              `json:"row,omitempty"`
 	Col        int              `json:"col,omitempty"`
 	Rect       *FrameRect       `json:"rect,omitempty"`
@@ -45,8 +56,9 @@ type AnimationClip struct {
 	End   []AnimationFrame `json:"end,omitempty"`
 }
 type AnimationMovement struct {
-	StrideRatio float64 `json:"strideRatio"`
-	Verified    bool    `json:"verified,omitempty"`
+	TrialSpeedRatio float64 `json:"trialSpeedRatio,omitempty"`
+	StrideRatio     float64 `json:"strideRatio"`
+	Verified        bool    `json:"verified,omitempty"`
 }
 
 type AnimationAction struct {
@@ -111,6 +123,11 @@ func (m *AnimationManifest) Validate(imageWidth, imageHeight int) error {
 				if f.DurationMS < 10 || f.DurationMS > 60000 {
 					return fmt.Errorf("action %q durationMs must be 10 to 60000", action)
 				}
+				if c := f.Canvas; c != nil {
+					if f.Rect == nil || c.W < 1 || c.H < 1 || c.W > 4096 || c.H > 4096 || c.X < 0 || c.Y < 0 || f.Rect.W > c.W || f.Rect.H > c.H || c.X > c.W-f.Rect.W || c.Y > c.H-f.Rect.H {
+						return fmt.Errorf("action %q has an invalid logical frame canvas", action)
+					}
+				}
 				if f.Rect != nil {
 					q := f.Rect
 					if q.X < 0 || q.Y < 0 || q.W <= 0 || q.H <= 0 || q.W > imageWidth || q.H > imageHeight || q.X > imageWidth-q.W || q.Y > imageHeight-q.H {
@@ -124,6 +141,9 @@ func (m *AnimationManifest) Validate(imageWidth, imageHeight int) error {
 		return nil
 	}
 	for name, a := range m.Actions {
+		if a.Movement != nil && (!finite(a.Movement.TrialSpeedRatio) || (a.Movement.TrialSpeedRatio != 0 && (a.Movement.TrialSpeedRatio < .05 || a.Movement.TrialSpeedRatio > .5))) {
+			return fmt.Errorf("action %q trialSpeedRatio must be zero or 0.05 to 0.5 canvas widths per second", name)
+		}
 		if a.Movement != nil && (!finite(a.Movement.StrideRatio) || a.Movement.StrideRatio <= 0 || a.Movement.StrideRatio > 2) {
 			return fmt.Errorf("action %q strideRatio must be finite and between 0 (exclusive) and 2", name)
 		}

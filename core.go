@@ -368,10 +368,34 @@ func (a *Atlas) FrameRectBGRA(r FrameRect, anchor AnimationAnchor, w, h int) []b
 	return a.frameRectTransformed(r, w, h, FrameRectTransform(r, anchor, w, h, false))
 }
 func (a *Atlas) frameRectTransformed(r FrameRect, w, h int, t SpriteTransform) []byte {
+	return a.frameRectCanvasTransformed(r, nil, w, h, t)
+}
+func FrameLogicalRect(f AnimationFrame) FrameRect {
+	if f.Canvas != nil {
+		return FrameRect{W: f.Canvas.W, H: f.Canvas.H}
+	}
+	if f.Rect != nil {
+		return *f.Rect
+	}
+	return FrameRect{W: 1, H: 1}
+}
+func AnimationFrameTransform(f AnimationFrame, anchor AnimationAnchor, w, h int, grounded bool) SpriteTransform {
+	return FrameRectTransform(FrameLogicalRect(f), anchor, w, h, grounded)
+}
+func (a *Atlas) frameRectCanvasTransformed(r FrameRect, canvas *FrameCanvas, w, h int, t SpriteTransform) []byte {
+	logicalW, logicalH, cropX, cropY := r.W, r.H, 0, 0
+	if canvas != nil {
+		logicalW, logicalH, cropX, cropY = canvas.W, canvas.H, canvas.X, canvas.Y
+	}
+
 	out := make([]byte, w*h*4)
 	for y := 0; y < t.ScaledH; y++ {
 		dy := t.OffsetY + y
 		if dy < 0 || dy >= h {
+			continue
+		}
+		sy := y*logicalH/t.ScaledH - cropY
+		if sy < 0 || sy >= r.H {
 			continue
 		}
 		for x := 0; x < t.ScaledW; x++ {
@@ -379,7 +403,11 @@ func (a *Atlas) frameRectTransformed(r FrameRect, w, h int, t SpriteTransform) [
 			if dx < 0 || dx >= w {
 				continue
 			}
-			c := a.Image.NRGBAAt(r.X+x*r.W/t.ScaledW, r.Y+y*r.H/t.ScaledH)
+			sx := x*logicalW/t.ScaledW - cropX
+			if sx < 0 || sx >= r.W {
+				continue
+			}
+			c := a.Image.NRGBAAt(r.X+sx, r.Y+sy)
 			if c.A < 24 {
 				continue
 			}
@@ -400,7 +428,7 @@ func RenderBehaviorPixels(a *Atlas, f BehaviorFrame, w, h int) []byte {
 	if f.Rect == nil {
 		return a.FrameBGRA(f.Row, f.Col, w, h)
 	}
-	return a.frameRectTransformed(*f.Rect, w, h, FrameRectTransform(*f.Rect, f.Anchor, w, h, f.Action != "drag"))
+	return a.frameRectCanvasTransformed(*f.Rect, f.Canvas, w, h, AnimationFrameTransform(f.AnimationFrame, f.Anchor, w, h, f.Action != "drag"))
 }
 
 func ManifestCanvas(m *AnimationManifest, a *Atlas) (int, int) {
@@ -414,8 +442,9 @@ func ManifestCanvas(m *AnimationManifest, a *Atlas) (int, int) {
 			for _, seq := range [][]AnimationFrame{clip.Start, clip.Loop, clip.End} {
 				for _, f := range seq {
 					if f.Rect != nil {
-						w = max(w, f.Rect.W)
-						h = max(h, f.Rect.H)
+						logical := FrameLogicalRect(f)
+						w = max(w, logical.W)
+						h = max(h, logical.H)
 					} else {
 						w = max(w, a.CellW)
 						h = max(h, a.CellH)

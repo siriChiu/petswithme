@@ -81,11 +81,18 @@ func (e *BehaviorEngine) canRun(i int, action string) bool {
 	s := e.States[i]
 	return HasRunAnimation(s.Player.Manifest, action, s.Mood) || (e.ExperimentalMovement && HasRunArtwork(s.Player.Manifest, action, s.Mood))
 }
+func ExperimentalRunPixelsPerSecond(m *AnimationManifest, action string, width int) float64 {
+	ratio := .23
+	if a, ok := m.Actions[action]; ok && a.Movement != nil && !a.Movement.Verified && a.Movement.TrialSpeedRatio >= .05 && a.Movement.TrialSpeedRatio <= .5 {
+		ratio = a.Movement.TrialSpeedRatio
+	}
+	return float64(width) * ratio
+}
 func (e *BehaviorEngine) movementSpeed(i int, action string) float64 {
 	s, c := e.States[i], e.Cats[i]
 	if strings.HasPrefix(action, "run_") && !HasRunAnimation(s.Player.Manifest, action, s.Mood) {
 		if e.ExperimentalMovement && HasRunArtwork(s.Player.Manifest, action, s.Mood) {
-			return float64(c.W) * .23
+			return ExperimentalRunPixelsPerSecond(s.Player.Manifest, action, c.W)
 		}
 		return 0
 	}
