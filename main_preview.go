@@ -45,6 +45,7 @@ type previewOptions struct {
 	GazeDuration   time.Duration
 	GaitOnly       bool
 	GaitActions    string
+	Actions        string
 }
 
 type previewCat struct {
@@ -86,6 +87,7 @@ type previewScene struct {
 	EndSeconds   float64               `json:"end_seconds"`
 	Sources      []previewActionSource `json:"sources"`
 	Gait         []previewGaitSource   `json:"gait,omitempty"`
+	StopFrame    int                   `json:"stop_frame,omitempty"`
 }
 
 type previewGaitSource struct {
@@ -151,6 +153,7 @@ type previewMetadata struct {
 	Cats                           []previewCatMetadata    `json:"cats"`
 	Scenes                         []previewScene          `json:"scenes"`
 	GaitOnly                       bool                    `json:"gait_only,omitempty"`
+	Capabilities                   []previewCapabilities   `json:"capabilities"`
 	Frames                         []previewFramePositions `json:"frames,omitempty"`
 }
 
@@ -173,6 +176,7 @@ func previewMain(args []string, stdout, stderr io.Writer) error {
 	fs.DurationVar(&opts.GazeDuration, "gaze-duration", 4800*time.Millisecond, "duration of the complete 16-direction gaze sweep, for example 4.8s")
 	fs.BoolVar(&opts.GaitOnly, "gait-only", false, "review translated right/left walks at app speed in three 900x220 ground-marked lanes")
 	fs.StringVar(&opts.GaitActions, "gait-actions", "", "gait-only actions: comma-separated walk_right,walk_left,run_right,run_left; trial runs remain diagnostic only")
+	fs.StringVar(&opts.Actions, "actions", "", "comma-separated action comparison; shows complete entry, at least one loop, then complete exit for every supplied cat")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: go run -tags motionpreview . --root PRIVATE_PACK --out EMPTY_OUTPUT [options]")
 		fs.PrintDefaults()
@@ -210,6 +214,21 @@ func previewMain(args []string, stdout, stderr io.Writer) error {
 }
 
 func validatePreviewOptions(opts previewOptions) error {
+	if opts.Actions != "" {
+		if opts.GaitOnly || opts.GaitActions != "" {
+			return errors.New("--actions cannot be combined with gait mode")
+		}
+		names := strings.Split(opts.Actions, ",")
+		if len(names) > 32 {
+			return errors.New("--actions supports at most 32 scenes")
+		}
+		for _, name := range names {
+			if len(name) == 0 || len(name) > 64 || strings.IndexFunc(name, func(r rune) bool { return r != '_' && (r < 'a' || r > 'z') && (r < '0' || r > '9') }) >= 0 {
+				return fmt.Errorf("invalid action name %q", name)
+			}
+		}
+	}
+
 	if opts.GaitActions != "" {
 		if !opts.GaitOnly {
 			return errors.New("--gait-actions requires --gait-only")
@@ -345,6 +364,26 @@ func previewSchedule(opts previewOptions, cats []previewCat) []previewScene {
 		}
 		scenes = append(scenes, s)
 		nextFrame += count
+	}
+	if opts.Actions != "" {
+		for _, action := range strings.Split(opts.Actions, ",") {
+			mood := "calm"
+			if action == "pet" {
+				mood = "happy"
+			} else if action == "play" {
+				mood = "playful"
+			}
+			active, exit := framesPerAction, 0
+			for _, cat := range cats {
+				clip := cat.Manifest.Resolve(action, mood)
+				active = max(active, previewSequenceFrames(opts.FPS, clip.Start, clip.Loop))
+				exit = max(exit, previewSequenceFrames(opts.FPS, clip.End))
+			}
+			start := nextFrame
+			add(action, action, mood, active+exit+1)
+			scenes[len(scenes)-1].StopFrame = start + active
+		}
+		return scenes
 	}
 	if opts.GaitOnly {
 		actions := opts.GaitActions
@@ -547,6 +586,12 @@ func renderMotionPreview(opts previewOptions) (*previewMetadata, error) {
 		meta.CanvasHeight = previewGaitHeight
 		meta.Notes = []string{"All artwork is read from the supplied private pack; baseline and tick marks are diagnostic UI guides only.", "Cats translate using the application stride calculation, without speed adjustment, clipping, clamping, or wrapping. Trial runs are diagnostic only: eligible_for_autonomous_motion reports the stricter runtime scheduling gate. This is a deterministic gait review, not a native Windows recording.", "A declared stride ratio is a pack calibration claim, not proof of correct gait. Missing or static walk artwork is never marked calibrated. Legacy movement without stride metadata is uncalibrated.", "Source frames, effective anchors, animation cursors, exact positions and integer drawn positions are recorded for every sample. Ground ticks are 20px apart.", "Root movement continues while sprite poses are held, which can cause within-hold sawtooth foot drift. max_root_travel_per_sprite_hold and root_pixels_per_sample expose that sampling effect separately; perfect foot planting is not asserted.", "Gait-only CLI defaults to 20fps, matching the application's normal 50ms timer. An explicit --fps overrides the sampling rate without changing movement speed.", "Right and left scenes restart their entry phase from opposite lane ends. Scene end frames are exclusive; end_x_at_scene_boundary includes the unsampled final frame interval."}
 	}
+	if opts.Actions != "" {
+		meta.Notes = append(meta.Notes[:3], "Custom action comparisons finish entry and at least one loop, then play all exit frames. Shorter exits hold their final recovery pose until the next scene. Runtime capability gates are reported separately from fallback rendering.")
+	}
+	for _, cat := range cats {
+		meta.Capabilities = append(meta.Capabilities, previewCapabilityReport(cat))
+	}
 	meta.Scenes = previewSchedule(opts, cats)
 	if opts.GaitOnly {
 		for i := range meta.Scenes {
@@ -593,6 +638,9 @@ func renderMotionPreview(opts previewOptions) (*previewMetadata, error) {
 			}
 			for column := range cats {
 				cat := &cats[column]
+				if opts.Actions != "" && frame == scene.StopFrame {
+					cat.Player.Stop()
+				}
 				im := previewImage(cat)
 				pos := previewCatPosition(column, cat.Width, cat.Height)
 				if opts.GaitOnly {
@@ -603,6 +651,8 @@ func renderMotionPreview(opts previewOptions) (*previewMetadata, error) {
 					}
 					x := gait.StartX + direction*gait.PixelsPerSecond*positions.SceneSeconds
 					pos = image.Pt(int(math.Round(x)), gait.Top)
+				}
+				if opts.GaitOnly || opts.Actions != "" {
 					sourceFrame := cat.Player.Frame()
 					anchor := cat.Manifest.Anchor
 					if sourceFrame.Anchor != nil {
@@ -613,12 +663,21 @@ func renderMotionPreview(opts previewOptions) (*previewMetadata, error) {
 						t := FrameRectTransform(*sourceFrame.Rect, anchor, cat.Width, cat.Height, scene.Action != "drag")
 						transform = &t
 					}
-					positions.Cats = append(positions.Cats, previewFramePosition{Name: cat.Spec.Name, Lane: column, X: x, Y: pos.Y, RenderedX: pos.X, RenderedY: pos.Y, Phase: cat.Player.Phase, AnimationIndex: cat.Player.Index, ElapsedMS: cat.Player.ElapsedMS, SourceFrame: sourceFrame, Anchor: anchor, Transform: transform})
+					rootX := float64(pos.X)
+					if opts.GaitOnly {
+						direction := 1.0
+						if strings.HasSuffix(scene.Action, "_left") {
+							direction = -1
+						}
+						gait := scene.Gait[column]
+						rootX = gait.StartX + direction*gait.PixelsPerSecond*positions.SceneSeconds
+					}
+					positions.Cats = append(positions.Cats, previewFramePosition{Name: cat.Spec.Name, Lane: column, X: rootX, Y: pos.Y, RenderedX: pos.X, RenderedY: pos.Y, Phase: cat.Player.Phase, AnimationIndex: cat.Player.Index, ElapsedMS: cat.Player.ElapsedMS, SourceFrame: sourceFrame, Anchor: anchor, Transform: transform})
 				}
 				draw.Draw(canvas, im.Bounds().Add(pos), im, im.Bounds().Min, draw.Over)
 				cat.Player.Tick(1 / float64(opts.FPS))
 			}
-			if opts.GaitOnly {
+			if opts.GaitOnly || opts.Actions != "" {
 				meta.Frames = append(meta.Frames, positions)
 			}
 			path := filepath.Join(opts.Out, fmt.Sprintf(previewFramePattern, frame))

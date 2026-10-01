@@ -196,3 +196,12 @@ This option permits only directly authored, distinct run frames, at a conservati
 claim natural gait, synthesize frames, or accelerate a walk clip into a run.
 Verified run calibration remains unchanged. Missing/idle-alias runs are still
 unavailable. Headless gait previews report this mode separately from calibration.
+
+To compare the same actions across all supplied cats, including complete recovery
+frames, use `--actions idle,pet,drag,play,knead,stretch,greet,idle`. This mode shows
+entry, at least one full loop, and every end frame before changing scenes. Its
+metadata records each sampled phase and source rectangle, plus per-cat authored
+versus fallback capabilities. It counts distinct rendered gaze drawings separately
+from usable direction aliases. These pixel/reference checks do not certify pose
+anatomy or likeness; visual review is still required. Keep the report private when
+it contains private names or asset paths.

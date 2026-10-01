@@ -463,3 +463,88 @@ func TestPreviewRunDiagnosticStaysExplicitlyUnverified(t *testing.T) {
 		t.Fatal("run selection accepted outside gait mode")
 	}
 }
+
+func TestPreviewCustomActionsFinishEntryAndExitForAllCats(t *testing.T) {
+	root := previewTestPack(t)
+	var m AnimationManifest
+	data, _ := os.ReadFile(filepath.Join(root, "qa.json"))
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	frame := func(x, ms int) AnimationFrame {
+		return AnimationFrame{Rect: &FrameRect{X: x, Y: 0, W: 8, H: 8}, DurationMS: ms}
+	}
+	m.Actions["stretch"] = AnimationAction{AnimationClip: AnimationClip{Start: []AnimationFrame{frame(0, 200)}, Loop: []AnimationFrame{frame(8, 300)}, End: []AnimationFrame{frame(0, 100), frame(8, 200)}}}
+	previewTestWriteJSON(t, filepath.Join(root, "qa.json"), m)
+	opts := previewTestOptions(root, filepath.Join(t.TempDir(), "comparison"))
+	opts.Actions = "idle,stretch,idle"
+	opts.ActionDuration = 100 * time.Millisecond
+	meta, err := renderMotionPreview(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Scenes) != 3 || len(meta.Capabilities) != 3 {
+		t.Fatal("comparison incomplete")
+	}
+	scene := meta.Scenes[1]
+	if scene.StopFrame-scene.StartFrame != 5 || scene.EndFrame-scene.StopFrame != 4 {
+		t.Fatalf("entry/loop/end truncated: %+v", scene)
+	}
+	seen := map[int]bool{}
+	done := 0
+	for _, frame := range meta.Frames {
+		if frame.Action != "stretch" {
+			continue
+		}
+		for _, cat := range frame.Cats {
+			if cat.Phase == AnimationEnd {
+				seen[cat.AnimationIndex] = true
+			}
+			if cat.Phase == AnimationDone {
+				done++
+			}
+		}
+	}
+	if !seen[0] || !seen[1] || done != 3 {
+		t.Fatalf("exit missing: %v done%d", seen, done)
+	}
+}
+func TestPreviewCapabilitiesDistinguishAliasesAndDuplicateDrawings(t *testing.T) {
+	cats, err := loadPreviewCats(previewTestPack(t), 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := cats[0]
+	m := cat.Manifest
+	frame := m.Actions["idle"].Loop[0]
+	m.Actions["gaze_0"] = AnimationAction{AnimationClip: AnimationClip{Loop: []AnimationFrame{frame}}}
+	m.Actions["gaze_4"] = m.Actions["gaze_0"] // Two references to identical pixels are still one drawing.
+	m.Actions["greet"] = AnimationAction{Fallback: "idle"}
+	m.Actions["knead"] = m.Actions["idle"] // Duplicate idle drawings are not CPU kneading.
+	report := previewCapabilityReport(cat)
+	if len(report.AuthoredGazeDirections) != 2 || len(report.UsableGazeDirections) != 3 || report.DistinctGazeDrawings != 1 {
+		t.Fatalf("gaze overclaimed: %+v", report)
+	}
+	for _, a := range report.Actions {
+		if a.Action == "greet" && (a.Authored || a.RuntimeEligible || a.DistinctDrawings != 0) {
+			t.Fatal("alias called authored greeting")
+		}
+		if a.Action == "knead" && a.RuntimeEligible {
+			t.Fatal("idle called kneading")
+		}
+	}
+}
+func TestPreviewCustomActionsValidation(t *testing.T) {
+	opts := previewTestOptions("root", "out")
+	for _, bad := range []string{"idle,", "../idle", "Idle", "idle pet", strings.Repeat("idle,", 32) + "idle"} {
+		opts.Actions = bad
+		if validatePreviewOptions(opts) == nil {
+			t.Fatalf("accepted%q", bad)
+		}
+	}
+	opts.Actions = "knead,stretch,idle"
+	opts.GaitOnly = true
+	if validatePreviewOptions(opts) == nil {
+		t.Fatal("accepted conflicting modes")
+	}
+}
