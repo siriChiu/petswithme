@@ -115,9 +115,21 @@ func lifecycleWriteFixture(dir string) error {
 	if closeErr != nil {
 		return closeErr
 	}
+	manifest := &AnimationManifest{SchemaVersion: 1, Fallback: "idle", Anchor: AnimationAnchor{X: .5, Y: 1}, Actions: map[string]AnimationAction{"idle": {AnimationClip: AnimationClip{Loop: []AnimationFrame{{Rect: &FrameRect{X: 0, Y: 0, W: 8, H: 8}, DurationMS: 200, Anchor: &AnimationAnchor{X: .5, Y: .9}}}}}}}
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(dir, "synthetic-animation.json"), manifestJSON, 0600); err != nil {
+		return err
+	}
 	cfg := Config{Version: 1}
 	for i := 0; i < 3; i++ {
-		cfg.Cats = append(cfg.Cats, CatSpec{Name: fmt.Sprintf("Lifecycle square %d", i+1), Sprite: "synthetic-qa.png", Demo: false})
+		spec := CatSpec{Name: fmt.Sprintf("Lifecycle square %d", i+1), Sprite: "synthetic-qa.png", Demo: false}
+		if i == 1 {
+			spec.Animations = "synthetic-animation.json"
+		}
+		cfg.Cats = append(cfg.Cats, spec)
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

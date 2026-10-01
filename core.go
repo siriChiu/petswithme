@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-const appVersion = "0.1.0-demo"
+const appVersion = "0.2.0-preview"
 
 var rowFrames = [11]int{6, 8, 8, 4, 5, 8, 6, 6, 5, 8, 8}
 

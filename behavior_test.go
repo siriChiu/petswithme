@@ -400,3 +400,22 @@ func TestBehaviorOverlappingDragPositionOnlySeparates(t *testing.T) {
 		t.Fatal("overlapping cat cannot move apart")
 	}
 }
+
+func TestBehaviorWakePlaysSleepEnd(t *testing.T) {
+	m := DefaultAnimationManifest()
+	sleep := m.Actions["sleep"]
+	sleep.End = []AnimationFrame{{Row: 0, Col: 2, DurationMS: 100}, {Row: 0, Col: 1, DurationMS: 100}}
+	m.Actions["sleep"] = sleep
+	c := NewCat(0, 100, 108, Rect{0, 0, 1000, 800})
+	e := NewBehaviorEngine([]*Cat{c}, m)
+	e.Tick(0, .1, 9000, 9000, 0, true)
+	f := e.Tick(.1, .1, 9000, 9000, 0, false)[0]
+	if f.Action != "sleep" || e.States[0].Player.Phase != AnimationEnd {
+		t.Fatalf("wake skipped end phase: %+v", f)
+	}
+	e.Tick(.2, .1, 9000, 9000, 0, false)
+	f = e.Tick(.3, .1, 9000, 9000, 0, false)[0]
+	if f.Action != "idle" {
+		t.Fatalf("wake did not return idle: %s", f.Action)
+	}
+}

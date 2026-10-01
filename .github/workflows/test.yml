@@ -23,6 +23,9 @@ jobs:
           cache: false
       - name: Unit tests and native Windows smoke checks
         run: go test -buildvcs=false -v ./...
+      - name: Headless preview tests
+        if: runner.os == 'Linux'
+        run: go test -tags motionpreview ./...
       - name: Vet platform-neutral code
         if: runner.os == 'Linux'
         run: go vet ./...

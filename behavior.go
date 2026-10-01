@@ -501,6 +501,14 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 			e.Cancel(i, now)
 			s.Mood = "calm"
 		}
+		// Waking from an autonomous sleep is a gentle transition. Direct
+		// interaction still interrupts immediately through the normal priorities.
+		if s.Action == "sleep" && s.Priority == PriorityIdle && !quiet && idleSeconds < 180 && !c.Dragging {
+			s.Priority = PriorityPlay
+			s.Until = now
+			s.Ending = true
+			s.Player.Stop()
+		}
 		if s.Priority >= PriorityPlay && now >= s.Until && !c.Dragging {
 			if !s.Ending {
 				s.Player.Stop()

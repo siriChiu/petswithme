@@ -6,8 +6,9 @@ approach → greet → follow → rest interactions.
 
 This is an early prototype. The public repository contains **code and synthetic
 QA fixtures only**. No reference photos, private cat artwork, or artwork-bearing
-release binary is published here. The private demo uses one existing atlas in
-three explicitly labeled demo slots; it is not finished artwork for three cats.
+release binary is published here. Private builds load approved character artwork from separate local packs. The
+initial demo used one atlas in three labeled slots; later packs remain private.
+A code build does not imply that every animation has bespoke artwork.
 
 ## Run a private demo
 
@@ -62,8 +63,10 @@ embedded demo. A relative `sprite` path loads a PNG inside the app folder; optio
 ## Architecture
 
 - `core.go`: bounded image/config loading, geometry and premultiplied BGRA conversion
+- `asset_validation.go`: frame-pixel validation, pack path boundaries and stable initial anchors
 - `behavior.go`: independent animation players, action arbitration and social coordinator
 - `main_windows.go`: Win32 per-pixel-alpha layered windows, tray and pointer events
+- `main_preview.go`: optional headless rendering with the same animation player
 - Tests: deterministic behavior simulations, format/fallback validation, ABI checks,
   Windows native lifecycle and alpha hit testing with synthetic artwork
 
@@ -87,3 +90,19 @@ is a finished bespoke animation.
 
 Project source: MIT, see [LICENSE](LICENSE). Private artwork is not included and
 is not licensed by the source-code license.
+
+## Private motion previews
+
+The optional headless tool renders only supplied artwork, using the real animation
+player at the default 144px width. It refuses demo/missing packs and writes a PNG
+sequence plus timing/fallback metadata. No private input or output belongs in git.
+
+```
+go test -tags motionpreview ./...
+go run -tags motionpreview . --root /path/to/private-pack --out /path/to/empty-preview
+```
+
+Default scenes cover idle, both walks, pet, drag, play, sleep and a gaze sweep.
+Missing actions retain their explicitly reported fallback chain; a preview is not
+proof that bespoke art exists for every action. Preview metadata may include private
+names and local paths, so keep it with the private pack.
