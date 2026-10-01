@@ -57,7 +57,7 @@ against image bounds; invalid actions/fallback cycles fail loading with a clear
 error. Missing requested actions use the manifest's declared global fallback.
 
 Behavior names: idle, walk_left, walk_right, run_left, run_right, drag, pet, play,
-sleep, sit, getup, rest, pounce,
+sleep, sit, getup, rest, pounce, knead,
 greet, social_rest, curious, waiting, groom, stretch, and gaze_0 through gaze_15.
 Each cat has its own animation cursor and interruption generation, even when art
 is shared. Explicit actions finish their end phase; urgent interruptions replace
@@ -123,3 +123,17 @@ can be inspected separately but is not autonomously enabled.
 "curiosity":0.7}`. Each value must be finite and between 0 and 1. Activity and
 temperament change choice probabilities and pause durations, not frame timing or
 calibrated stride speed. Old settings with only `quiet` continue to load.
+
+## CPU response artwork
+
+`knead` is stationary alternating-paw kneading. `stretch` is a separate whole-cat
+stretch with its own start/loop/end phases. Both need directly authored clips and no `demoFallback` marker. Knead needs
+at least two distinct loop references; stretch needs distinct poses across its
+start/loop/end sequence and may hold one deep-stretch loop frame. Repeating
+an idle/pet/walk loop under either name is rejected as a capability. Source
+reference checks do not replace visual verification of actual drawn poses.
+
+The load state never changes animation playback speed or calibrated stride. It
+keeps the cat's root stationary, pauses for direct interaction and quiet mode,
+and consumes only one stretch opportunity per configured interval. Missing
+stretch artwork leaves kneading in place.

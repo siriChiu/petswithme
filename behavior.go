@@ -369,6 +369,7 @@ const (
 	PriorityIdle BehaviorPriority = iota
 	PriorityWander
 	PrioritySocial
+	PriorityBusy
 	PriorityPlay
 	PriorityPet
 	PriorityDrag
@@ -382,20 +383,22 @@ type BehaviorFrame struct {
 	Generation uint64
 }
 type CatBehavior struct {
-	Action, Mood                   string
-	Priority                       BehaviorPriority
-	Until, NextDecision, GazeUntil float64
-	Player                         *AnimationPlayer
-	WasDragging                    bool
-	Ending                         bool
-	Temperament                    Temperament
-	TargetX                        float64
-	HasDestination                 bool
-	LastChoice                     string
-	ActionCooldown                 map[string]float64
-	AttentionUntil, AttentionAfter float64
-	AfterAction                    string
-	Autonomous                     bool
+	Action, Mood                                       string
+	Priority                                           BehaviorPriority
+	Until, NextDecision, GazeUntil                     float64
+	Player                                             *AnimationPlayer
+	WasDragging                                        bool
+	Ending                                             bool
+	Temperament                                        Temperament
+	TargetX                                            float64
+	HasDestination                                     bool
+	LastChoice                                         string
+	ActionCooldown                                     map[string]float64
+	AttentionUntil, AttentionAfter                     float64
+	AfterAction                                        string
+	Autonomous                                         bool
+	BusyElapsed, BusyNextStretch, BusyStretchRemaining float64
+	BusyStretching, BusyStretchEnding                  bool
 }
 type BehaviorEngine struct {
 	Cats     []*Cat
@@ -403,13 +406,14 @@ type BehaviorEngine struct {
 	Manifest *AnimationManifest
 	Social   *SocialCoordinator
 	Activity ActivityLevel
+	Load     *CPULoadState
 }
 
 func NewBehaviorEngine(cats []*Cat, m *AnimationManifest) *BehaviorEngine {
 	if m == nil {
 		m = DefaultAnimationManifest()
 	}
-	e := &BehaviorEngine{Cats: cats, Manifest: m, Social: NewSocialCoordinator(), Activity: ActivityNormal}
+	e := &BehaviorEngine{Cats: cats, Manifest: m, Social: NewSocialCoordinator(), Activity: ActivityNormal, Load: NewCPULoadState(DefaultCPUSettings())}
 	for i := range cats {
 		e.States = append(e.States, &CatBehavior{Action: "idle", Mood: "calm", Priority: PriorityIdle, NextDecision: 2 + float64(i)*1.3, Player: NewAnimationPlayer(m), Temperament: DefaultTemperament(i), ActionCooldown: map[string]float64{}})
 		e.States[i].Player.Tick(float64(i) * .17)
@@ -446,6 +450,8 @@ func (e *BehaviorEngine) Cancel(i int, now float64) {
 	s.HasDestination = false
 	s.AfterAction = ""
 	s.Autonomous = false
+	s.BusyStretching = false
+	s.BusyStretchEnding = false
 	s.Player.Play("idle", s.Mood)
 }
 func (e *BehaviorEngine) Pet(i int, now float64) {
@@ -490,6 +496,8 @@ func (e *BehaviorEngine) Request(i int, action string, priority BehaviorPriority
 	s.HasDestination = false
 	s.AfterAction = ""
 	s.Autonomous = false
+	s.BusyStretching = false
+	s.BusyStretchEnding = false
 	// A fresh release-click can arrive before the next timer sees Dragging=false.
 	// It replaces the drag instead of being mistaken for stale pre-drag work.
 	s.WasDragging = false
@@ -511,13 +519,25 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 	}
 	dt = math.Min(dt, .25)
 	quiet = quiet || e.Activity == ActivityQuiet
+	if e.Load != nil {
+		e.Load.Expire(now)
+	}
 	blocked := make([]bool, len(e.Cats))
+	busy := make([]bool, len(e.Cats))
 	for i, c := range e.Cats {
 		if c == nil {
 			blocked[i] = true
 			continue
 		}
 		s := e.States[i]
+		busy[i] = e.cpuEligible(i, quiet)
+		if e.Load == nil || !e.Load.Active {
+			s.BusyElapsed = 0
+			s.BusyNextStretch = 0
+		}
+		if !busy[i] {
+			e.clearBusyAction(i, now)
+		}
 		if quiet && s.Autonomous {
 			e.Cancel(i, now)
 		}
@@ -536,7 +556,7 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		}
 		// Waking from an autonomous sleep is a gentle transition. Direct
 		// interaction still interrupts immediately through the normal priorities.
-		if s.Action == "sleep" && s.Priority == PriorityIdle && !quiet && idleSeconds < 180 && !c.Dragging {
+		if s.Action == "sleep" && s.Priority == PriorityIdle && !quiet && (idleSeconds < 180 || busy[i]) && !c.Dragging {
 			s.Priority = PriorityPlay
 			s.Until = now
 			s.Ending = true
@@ -565,10 +585,20 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 				s.AfterAction = ""
 			}
 		}
+		// Drag release and completed direct actions may change mood. Re-evaluate
+		// artwork in that final mood before letting CPU state claim the action.
+		busy[i] = e.cpuEligible(i, quiet)
+		if !busy[i] {
+			e.clearBusyAction(i, now)
+		}
 		blocked[i] = c.Dragging || (s.Priority >= PriorityPlay && (now < s.Until || s.Ending))
 	}
 	e.configureSocial()
-	intents := e.Social.Tick(e.Cats, blocked, now, dt, quiet || idleSeconds >= 180)
+	socialBlocked := append([]bool(nil), blocked...)
+	for i := range socialBlocked {
+		socialBlocked[i] = socialBlocked[i] || busy[i]
+	}
+	intents := e.Social.Tick(e.Cats, socialBlocked, now, dt, quiet || idleSeconds >= 180)
 	out := make([]BehaviorFrame, len(e.Cats))
 	for i, c := range e.Cats {
 		if c == nil {
@@ -581,6 +611,8 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 			action = "drag"
 		case blocked[i]:
 			action = s.Action
+		case busy[i]:
+			action = e.tickBusy(i, now, dt)
 		case quiet || idleSeconds >= 180:
 			s.Action = e.restingAction(i)
 			s.HasDestination = false

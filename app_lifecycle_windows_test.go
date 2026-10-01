@@ -264,6 +264,26 @@ func lifecycleDrive(ctx context.Context) (err error) {
 	if err = lifecycleWait(ctx, "normal activity saved", func() bool { return activityIs(ActivityNormal) }); err != nil {
 		return err
 	}
+	cpuEnabled := func(want bool) bool {
+		data, err := os.ReadFile(settingsPath)
+		if err != nil {
+			return false
+		}
+		var settings Settings
+		return json.Unmarshal(data, &settings) == nil && settings.CPU.Enabled == want && settings.CPU.StretchEverySeconds == 300
+	}
+	if err = postCommand(108); err != nil {
+		return err
+	}
+	if err = lifecycleWait(ctx, "CPU response disabled", func() bool { return cpuEnabled(false) }); err != nil {
+		return err
+	}
+	if err = postCommand(108); err != nil {
+		return err
+	}
+	if err = lifecycleWait(ctx, "CPU response enabled", func() bool { return cpuEnabled(true) }); err != nil {
+		return err
+	}
 	if err = postCommand(105); err != nil {
 		return err
 	} // Play all three.
@@ -312,6 +332,9 @@ func TestWindowsAppLifecycleHelper(t *testing.T) {
 	if app.Hidden || app.Settings.Quiet || app.Settings.Activity != ActivityNormal || app.Settings.Size != 96 {
 		t.Fatalf("commands did not leave expected state: hidden=%v settings=%+v", app.Hidden, app.Settings)
 	}
+	if !app.Settings.CPU.Enabled {
+		t.Fatal("CPU settings were not restored")
+	}
 	if expected := filepath.Join(os.Getenv("APPDATA"), "ThreeCatCompanion", "settings.json"); app.SettingsPath != expected {
 		t.Fatalf("preferences escaped test profile: %q, expected %q", app.SettingsPath, expected)
 	}
@@ -329,5 +352,5 @@ func TestWindowsAppLifecycleHelper(t *testing.T) {
 	if exists, _, _ := smokeIsWindow.Call(app.Controller); exists != 0 {
 		t.Fatal("controller survived main return")
 	}
-	t.Log("REAL_APP_LIFECYCLE_PASSED: real main, tray setup, three synthetic pets, quiet/normal/lively/hide/show/reset/play/size/quit, isolated settings, window and DIB cleanup")
+	t.Log("REAL_APP_LIFECYCLE_PASSED: real main, tray setup, three synthetic pets, CPU toggle/quiet/normal/lively/hide/show/reset/play/size/quit, isolated settings, window and DIB cleanup")
 }

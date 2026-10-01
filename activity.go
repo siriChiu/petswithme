@@ -48,5 +48,6 @@ func NormalizeSettings(s Settings) Settings {
 	}
 	s.Quiet = s.Activity == ActivityQuiet
 	s.Size = ValidSize(s.Size)
+	s.CPU = NormalizeCPUSettings(s.CPU)
 	return s
 }

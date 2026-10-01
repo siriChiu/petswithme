@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-const appVersion = "0.3.0-preview"
+const appVersion = "0.4.0-preview"
 
 var rowFrames = [11]int{6, 8, 8, 4, 5, 8, 6, 6, 5, 8, 8}
 
@@ -122,6 +122,7 @@ type Settings struct {
 	Quiet    bool          `json:"quiet"`
 	Size     int           `json:"size"`
 	Activity ActivityLevel `json:"activity,omitempty"`
+	CPU      CPUSettings   `json:"cpu"`
 }
 
 func ValidSize(s int) int {
@@ -146,7 +147,7 @@ func SaveSettings(path string, s Settings) error {
 	return os.Rename(tmp, path)
 }
 func LoadSettings(path string) Settings {
-	s := Settings{Size: 144}
+	s := Settings{Size: 144, CPU: DefaultCPUSettings()}
 	if b, e := readBoundedFile(path, 4096); e == nil {
 		_ = json.Unmarshal(b, &s)
 	}

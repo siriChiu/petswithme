@@ -151,6 +151,7 @@ var app struct {
 	Frames                            map[string][]byte
 	CachedBytes                       int
 	Engine                            *BehaviorEngine
+	CPU                               CPUMonitor
 	Settings                          Settings
 	SettingsPath, Folder              string
 	Hidden, Quitting                  bool
@@ -259,6 +260,9 @@ func renderFrame(p *PetWindow, frame BehaviorFrame) error {
 func nowSeconds() float64 { return time.Since(app.Start).Seconds() }
 func setInterval() {
 	ms := uintptr(50)
+	if app.Engine != nil && app.Engine.Load != nil && app.Engine.Load.Active {
+		ms = 100
+	}
 	if app.Settings.Quiet {
 		ms = 250
 	}
@@ -293,6 +297,7 @@ func updateBounds(p *PetWindow) {
 	c.X, c.Y = ClampPosition(c.X, c.Y, c.W, c.H, c.Bounds)
 }
 func reset() {
+	resetCPUMonitor()
 	p := currentCursor()
 	r := workArea(0, p)
 	for i, w := range app.Pets {
@@ -320,6 +325,7 @@ func reset() {
 	setInterval()
 }
 func toggleHidden() {
+	resetCPUMonitor()
 	app.Hidden = !app.Hidden
 	for _, p := range app.Pets {
 		v := uintptr(0)
@@ -364,6 +370,7 @@ func tick() {
 	if app.Engine == nil {
 		return
 	}
+	pollCPU(now)
 	frames := app.Engine.Tick(now, dt, float64(p.X), float64(p.Y), app.Idle, app.Settings.Quiet)
 	for i, w := range app.Pets {
 		if e := renderFrame(w, frames[i]); e != nil {
@@ -401,6 +408,7 @@ func menu() {
 	add(101, "安靜（停止自主活動）", app.Settings.Activity == ActivityQuiet)
 	add(106, "一般活動", app.Settings.Activity == ActivityNormal)
 	add(107, "活潑（更常探索與互動）", app.Settings.Activity == ActivityLively)
+	add(108, "隨 CPU 負載踏踏／伸懶腰（需動作素材）", app.Settings.CPU.Enabled)
 	add(102, "把貓咪帶回滑鼠所在螢幕", false)
 	add(105, "一起玩一下", false)
 	appendMenu.Call(h, 0x800, 0, 0)
@@ -443,6 +451,15 @@ func command(id int) {
 		changeActivity(ActivityNormal)
 	case 107:
 		changeActivity(ActivityLively)
+	case 108:
+		app.Settings.CPU.Enabled = !app.Settings.CPU.Enabled
+		if app.Engine != nil {
+			app.Engine.SetCPUSettings(app.Settings.CPU)
+		}
+		resetCPUMonitor()
+		save()
+		setInterval()
+		tick()
 	case 102:
 		reset()
 	case 105:
@@ -468,7 +485,7 @@ func command(id int) {
 		for i, p := range app.Pets {
 			specs[i] = p.Spec
 		}
-		messageBox.Call(app.Controller, uintptr(unsafe.Pointer(utf("三貓桌面陪伴 "+appVersion+"\n\n點一下：摸摸／揮手回應\n點兩下：玩一下\n按住拖曳：移動貓咪\n右鍵貓咪或右下角圖示：選單\n系統閒置約 3 分鐘：打盹\n活動選單：安靜／一般／活潑\n活潑會更常探索，仍可摸摸和拖曳\n新動作需有對應素材；跑步不會拿散步加速代替\n\n"+CharacterSummary(specs)+"\n\n完全離線，不擷取畫面、文字或按鍵。\n只讀滑鼠位置、拖曳時的滑鼠按鈕與系統閒置秒數。\n沒有自動開機啟動、廣告或更新下載。\n\n已通過 Windows 原生透明視窗與基本生命週期測試；多螢幕操作與最終素材仍待實機驗證。"))), uintptr(unsafe.Pointer(utf(appTitle))), 0x40)
+		messageBox.Call(app.Controller, uintptr(unsafe.Pointer(utf("三貓桌面陪伴 "+appVersion+"\n\n點一下：摸摸／揮手回應\n點兩下：玩一下\n按住拖曳：移動貓咪\n右鍵貓咪或右下角圖示：選單\n系統閒置約 3 分鐘：打盹\n活動選單：安靜／一般／活潑\n活潑會更常探索，仍可摸摸和拖曳\n新動作需有對應素材；跑步不會拿散步加速代替\n\n"+CharacterSummary(specs)+"\n\n完全離線，不擷取畫面、文字或按鍵。\n只讀滑鼠位置、拖曳時的滑鼠按鈕、系統閒置秒數與總體 CPU 計時。\nCPU 高負載踏踏：預設 70% 持續 10 秒，每 5 分鐘伸懶腰；需專屬動作素材。\n僅表示電腦負載，不代表使用者工作狀態，可在選單關閉。\n沒有自動開機啟動、廣告或更新下載。\n\n已通過 Windows 原生透明視窗與基本生命週期測試；多螢幕操作與最終素材仍待實機驗證。"))), uintptr(unsafe.Pointer(utf(appTitle))), 0x40)
 	case 104:
 		quit()
 	}
@@ -496,6 +513,13 @@ func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	}
 	if hwnd == app.Controller {
 		switch msg {
+		case 0x0218: // WM_POWERBROADCAST
+			if wp == 4 || wp == 7 || wp == 18 {
+				resetCPUMonitor()
+				app.LastTime = nowSeconds()
+				setInterval()
+				return 1
+			}
 		case 0x0111:
 			command(int(wp & 0xffff))
 			return 0
@@ -808,6 +832,7 @@ func main() {
 	}
 	app.Engine = NewBehaviorEngine(cats, DefaultAnimationManifest())
 	app.Engine.SetActivity(app.Settings.Activity)
+	app.Engine.SetCPUSettings(app.Settings.CPU)
 	for i, p := range app.Pets {
 		app.Engine.SetManifest(i, p.Manifest)
 		if p.Spec.Temperament != nil {

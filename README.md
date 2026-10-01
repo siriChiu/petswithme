@@ -34,9 +34,9 @@ unverified behavior.
 ## Privacy
 
 The program only samples cursor position, the primary mouse-button state while
-dragging, and aggregate system idle duration. It does not capture screens,
+dragging, aggregate system idle duration, and aggregate system CPU timing at roughly two-second intervals. It does not capture screens,
 read window titles/documents, record keystrokes, make network requests, install
-services, modify startup settings, or download updates. Small size/activity settings
+services, modify startup settings, or download updates. Small size/activity/CPU-response settings
 are saved under `%APPDATA%/ThreeCatCompanion/settings.json`. Delete that folder to
 reset preferences. Hidden mode stops the animation timer entirely.
 
@@ -140,3 +140,43 @@ To inspect a separate run candidate, use `--gait-only --gait-actions run_right,r
 Unverified runs show explicitly labeled trial translation for sole-contact
 measurement; they are not enabled for autonomous movement in the app. The
 metadata reports that distinction.
+
+## CPU-responsive kneading
+
+The optional CPU response is enabled by default and can be turned off in the
+notification-area menu. It reads only aggregate system timing using Windows
+`GetSystemTimes`, with no process inspection, window contents, or keystroke
+monitoring. CPU measurements stay in memory. This indicates computer load,
+not whether the person is busy or working.
+
+Defaults: smoothed CPU above 70% for 10 seconds starts stationary `knead`;
+smoothed CPU below 50% for 10 seconds ends it. Smoothing uses a four-second
+time constant and a two-second sampling gate. While latched busy, the 50–70%
+band avoids rapid switching. Each cat stretches once per 300 seconds of active
+busy behavior, then resumes kneading. Direct actions and quiet mode pause that
+cat's elapsed busy-action time; they never queue catch-up stretches.
+
+Drag, petting and manual play outrank the response. Quiet mode disables it.
+Supported CPU response outranks automatic inactivity sleep, so a long unattended
+computer job can still show the five-minute stretch. Hide/show, reset, power
+suspend/resume, failed samples or gaps longer than six seconds require fresh
+continuity. No sampling takes place while hidden or disabled. Active busy mode
+uses a modest 100ms render timer; dragging retains its normal responsive timer.
+
+Only directly authored, distinct `knead` and `stretch` loops qualify. Missing
+knead art leaves normal behavior; missing stretch art keeps kneading. A copy of
+idle/pet frames does not qualify. This code support does not mean those private
+generated artwork packs are ready.
+
+Settings in `%APPDATA%/ThreeCatCompanion/settings.json` include a `cpu` object
+with `enabled`, `enterPercent`, `exitPercent`, `enterSeconds`, `exitSeconds`, and
+`stretchEverySeconds`. Close the app before editing thresholds/timing. Defaults
+are true / 70 / 50 / 10 / 10 / 300 respectively. Durations are in seconds and
+both thresholds must be strictly between 0 and 100, with exitPercent lower than enterPercent. Invalid values safely use defaults,
+while preserving an explicit disabled setting.
+
+`GetSystemTimes` includes idle in its kernel counter. The sampler subtracts idle
+from checked kernel+user deltas. On a machine with multiple processor groups it
+fails closed rather than calling a partial-group measurement whole-machine CPU.
+Ordinary pet behavior keeps working. See Microsoft's [GetSystemTimes API](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getsystemtimes)
+and [processor-group API](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getactiveprocessorgroupcount).

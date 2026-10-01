@@ -9,6 +9,9 @@
 - Seeded random destinations, dwell variation, repeated-action avoidance and activity-rate simulations
 - Real-action gates, separate verified running, quiet cancellation and sit/get-up end transitions
 - Legacy quiet-setting migration and per-cat temperament validation
+- Aggregate CPU counter arithmetic, low-cadence sampling, smoothing, sustained hysteresis and continuity resets
+- CPU action priority, missing/duplicate-art gates, stationary kneading and single-interval stretch timing
+- Native Windows GetSystemTimes sampling and CPU enable/disable preference controls
 - Premultiplied BGRA ordering and alpha hit-threshold conversion
 - Negative-coordinate monitor bounds, settings and config validation
 - Windows x64 GUI cross-compilation without cgo
