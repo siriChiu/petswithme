@@ -180,3 +180,16 @@ from checked kernel+user deltas. On a machine with multiple processor groups it
 fails closed rather than calling a partial-group measurement whole-machine CPU.
 Ordinary pet behavior keeps working. See Microsoft's [GetSystemTimes API](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getsystemtimes)
 and [processor-group API](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getactiveprocessorgroupcount).
+
+## Optional experimental stylized movement
+
+`experimentalMovement` is off by default. A private `cats.json` may explicitly
+opt in for a user-approved playable preview; a saved preference takes priority.
+The tray checkbox is labeled as uncalibrated with possible foot sliding, and an
+explicit saved off choice remains off on later launches.
+
+This option permits only directly authored, distinct run frames, at a conservative
+0.23 canvas-widths/second trial speed. It does not change `movement.verified`,
+claim natural gait, synthesize frames, or accelerate a walk clip into a run.
+Verified run calibration remains unchanged. Missing/idle-alias runs are still
+unavailable. Headless gait previews report this mode separately from calibration.

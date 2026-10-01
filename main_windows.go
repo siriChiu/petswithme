@@ -409,6 +409,7 @@ func menu() {
 	add(106, "一般活動", app.Settings.Activity == ActivityNormal)
 	add(107, "活潑（更常探索與互動）", app.Settings.Activity == ActivityLively)
 	add(108, "隨 CPU 負載踏踏／伸懶腰（需動作素材）", app.Settings.CPU.Enabled)
+	add(109, "試玩小跑（未校準，可能滑步）", app.Settings.ExperimentalMovement)
 	add(102, "把貓咪帶回滑鼠所在螢幕", false)
 	add(105, "一起玩一下", false)
 	appendMenu.Call(h, 0x800, 0, 0)
@@ -459,6 +460,13 @@ func command(id int) {
 		resetCPUMonitor()
 		save()
 		setInterval()
+		tick()
+	case 109:
+		app.Settings.ExperimentalMovement = !app.Settings.ExperimentalMovement
+		if app.Engine != nil {
+			app.Engine.SetExperimentalMovement(app.Settings.ExperimentalMovement)
+		}
+		save()
 		tick()
 	case 102:
 		reset()
@@ -732,7 +740,7 @@ func main() {
 		confDir = app.Folder
 	}
 	app.SettingsPath = filepath.Join(confDir, "ThreeCatCompanion", "settings.json")
-	app.Settings = LoadSettings(app.SettingsPath)
+	app.Settings = LoadSettings(app.SettingsPath, cfg.ExperimentalMovement)
 	cursor, _, _ := loadCursor.Call(0, 32512)
 	app.Icon, _, _ = loadIcon.Call(0, 32512)
 	proc := syscall.NewCallback(windowProc)
@@ -833,6 +841,7 @@ func main() {
 	app.Engine = NewBehaviorEngine(cats, DefaultAnimationManifest())
 	app.Engine.SetActivity(app.Settings.Activity)
 	app.Engine.SetCPUSettings(app.Settings.CPU)
+	app.Engine.SetExperimentalMovement(app.Settings.ExperimentalMovement)
 	for i, p := range app.Pets {
 		app.Engine.SetManifest(i, p.Manifest)
 		if p.Spec.Temperament != nil {

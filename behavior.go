@@ -401,12 +401,13 @@ type CatBehavior struct {
 	BusyStretching, BusyStretchEnding                  bool
 }
 type BehaviorEngine struct {
-	Cats     []*Cat
-	States   []*CatBehavior
-	Manifest *AnimationManifest
-	Social   *SocialCoordinator
-	Activity ActivityLevel
-	Load     *CPULoadState
+	Cats                 []*Cat
+	States               []*CatBehavior
+	Manifest             *AnimationManifest
+	Social               *SocialCoordinator
+	Activity             ActivityLevel
+	Load                 *CPULoadState
+	ExperimentalMovement bool
 }
 
 func NewBehaviorEngine(cats []*Cat, m *AnimationManifest) *BehaviorEngine {
@@ -630,22 +631,12 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 				action = e.socialAction(i, intent.Action)
 				if intent.Move {
 					direction := intent.TargetX - c.X
-					if direction < 0 {
-						action = "walk_left"
-					} else {
-						action = "walk_right"
-					}
-					if intent.Action == "chase" {
-						action = "run_right"
-						if direction < 0 {
-							action = "run_left"
-						}
-					}
+					action = e.movementAction(i, direction, intent.Action == "chase")
 					oldX, oldY := c.X, c.Y
-					if math.Hypot(intent.TargetX-c.X, intent.TargetY-c.Y) <= 1 {
+					if action == "" || math.Hypot(intent.TargetX-c.X, intent.TargetY-c.Y) <= 1 {
 						action = "idle"
 					} else {
-						e.moveToward(i, intent.TargetX, intent.TargetY, LocomotionPixelsPerSecond(s.Player.Manifest, action, s.Mood, c.W)*dt)
+						e.moveToward(i, intent.TargetX, intent.TargetY, e.movementSpeed(i, action)*dt)
 						if math.Hypot(c.X-oldX, c.Y-oldY) < .01 {
 							action = "idle"
 						}

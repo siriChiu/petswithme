@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-const appVersion = "0.4.0-preview"
+const appVersion = "0.4.1-preview"
 
 var rowFrames = [11]int{6, 8, 8, 4, 5, 8, 6, 6, 5, 8, 8}
 
@@ -56,8 +56,9 @@ type CatSpec struct {
 	Temperament *Temperament `json:"temperament,omitempty"`
 }
 type Config struct {
-	Version int       `json:"version"`
-	Cats    []CatSpec `json:"cats"`
+	Version              int       `json:"version"`
+	Cats                 []CatSpec `json:"cats"`
+	ExperimentalMovement bool      `json:"experimentalMovement,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -119,10 +120,11 @@ func LoadConfig(dir string) (Config, error) {
 }
 
 type Settings struct {
-	Quiet    bool          `json:"quiet"`
-	Size     int           `json:"size"`
-	Activity ActivityLevel `json:"activity,omitempty"`
-	CPU      CPUSettings   `json:"cpu"`
+	Quiet                bool          `json:"quiet"`
+	Size                 int           `json:"size"`
+	Activity             ActivityLevel `json:"activity,omitempty"`
+	CPU                  CPUSettings   `json:"cpu"`
+	ExperimentalMovement bool          `json:"experimentalMovement"`
 }
 
 func ValidSize(s int) int {
@@ -146,8 +148,8 @@ func SaveSettings(path string, s Settings) error {
 	}
 	return os.Rename(tmp, path)
 }
-func LoadSettings(path string) Settings {
-	s := Settings{Size: 144, CPU: DefaultCPUSettings()}
+func LoadSettings(path string, experimentalDefault ...bool) Settings {
+	s := Settings{Size: 144, CPU: DefaultCPUSettings(), ExperimentalMovement: len(experimentalDefault) > 0 && experimentalDefault[0]}
 	if b, e := readBoundedFile(path, 4096); e == nil {
 		_ = json.Unmarshal(b, &s)
 	}

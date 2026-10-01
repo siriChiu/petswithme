@@ -284,6 +284,26 @@ func lifecycleDrive(ctx context.Context) (err error) {
 	if err = lifecycleWait(ctx, "CPU response enabled", func() bool { return cpuEnabled(true) }); err != nil {
 		return err
 	}
+	experimentalIs := func(want bool) bool {
+		data, err := os.ReadFile(settingsPath)
+		if err != nil {
+			return false
+		}
+		var settings Settings
+		return json.Unmarshal(data, &settings) == nil && settings.ExperimentalMovement == want
+	}
+	if err = postCommand(109); err != nil {
+		return err
+	}
+	if err = lifecycleWait(ctx, "experimental movement enabled", func() bool { return experimentalIs(true) }); err != nil {
+		return err
+	}
+	if err = postCommand(109); err != nil {
+		return err
+	}
+	if err = lifecycleWait(ctx, "experimental movement disabled", func() bool { return experimentalIs(false) }); err != nil {
+		return err
+	}
 	if err = postCommand(105); err != nil {
 		return err
 	} // Play all three.
@@ -352,5 +372,5 @@ func TestWindowsAppLifecycleHelper(t *testing.T) {
 	if exists, _, _ := smokeIsWindow.Call(app.Controller); exists != 0 {
 		t.Fatal("controller survived main return")
 	}
-	t.Log("REAL_APP_LIFECYCLE_PASSED: real main, tray setup, three synthetic pets, CPU toggle/quiet/normal/lively/hide/show/reset/play/size/quit, isolated settings, window and DIB cleanup")
+	t.Log("REAL_APP_LIFECYCLE_PASSED: real main, tray setup, three synthetic pets, experimental movement toggle/CPU toggle/quiet/normal/lively/hide/show/reset/play/size/quit, isolated settings, window and DIB cleanup")
 }

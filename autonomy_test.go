@@ -302,3 +302,63 @@ func TestAutonomySitGetupEndAndQuietInterrupt(t *testing.T) {
 		}
 	}
 }
+
+func TestExperimentalRunOptInDoesNotForgeCalibration(t *testing.T) {
+	m := fullCapabilityFixture()
+	delete(m.Actions, "walk_left")
+	delete(m.Actions, "walk_right")
+	for _, action := range []string{"run_left", "run_right"} {
+		a := m.Actions[action]
+		a.Movement.Verified = false
+		m.Actions[action] = a
+	}
+	e := NewBehaviorEngine(behaviorCats(2), m)
+	if e.canRun(0, "run_right") || e.movementSpeed(0, "run_right") != 0 {
+		t.Fatal("trial enabled by default")
+	}
+	e.SetExperimentalMovement(true)
+	if !e.canRun(0, "run_right") || HasRunAnimation(m, "run_right", "calm") || e.movementSpeed(0, "run_right") != 23 {
+		t.Fatal("trial forged verified stride or wrong conservative speed")
+	}
+	if e.movementAction(0, 1, false) != "run_right" {
+		t.Fatal("run-only pack cannot move")
+	}
+	e.configureSocial()
+	if !e.Social.Eligible(0, 1) {
+		t.Fatal("run-only pair unavailable")
+	}
+	s := e.States[0]
+	s.Action = "run_right"
+	s.Priority = PriorityWander
+	s.Until = 100
+	s.TargetX = 500
+	s.HasDestination = true
+	e.SetExperimentalMovement(false)
+	x := e.Cats[0].X
+	quietCursor(e, 1, .1, false)
+	if e.Cats[0].X != x || s.Action != "idle" {
+		t.Fatal("turning off trial kept unverified movement")
+	}
+	m.Actions["run_right"] = AnimationAction{Fallback: "idle"}
+	e.SetExperimentalMovement(true)
+	if e.canRun(0, "run_right") {
+		t.Fatal("experimental mode bypassed real-art gate")
+	}
+}
+func TestExperimentalSettingRemembersExplicitOff(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	s := LoadSettings(p, true)
+	if !s.ExperimentalMovement {
+		t.Fatal("approved private preset lost")
+	}
+	s.ExperimentalMovement = false
+	if err := SaveSettings(p, s); err != nil {
+		t.Fatal(err)
+	}
+	if LoadSettings(p, true).ExperimentalMovement {
+		t.Fatal("explicit off overwritten by pack default")
+	}
+	if LoadSettings(filepath.Join(t.TempDir(), "new.json")).ExperimentalMovement {
+		t.Fatal("public default opted in")
+	}
+}

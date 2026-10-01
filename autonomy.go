@@ -48,14 +48,18 @@ func HasAuthoredAction(m *AnimationManifest, action, mood string) bool {
 	return false
 }
 func HasRunAnimation(m *AnimationManifest, action, mood string) bool {
+	if !HasRunArtwork(m, action, mood) {
+		return false
+	}
+	a := m.Actions[action]
+	return a.Movement != nil && a.Movement.Verified && finite(a.Movement.StrideRatio) && a.Movement.StrideRatio > 0
+}
+
+func HasRunArtwork(m *AnimationManifest, action, mood string) bool {
 	if action != "run_left" && action != "run_right" {
 		return false
 	}
 	if !HasAuthoredAction(m, action, mood) || !HasWalkAnimation(m, action, mood) {
-		return false
-	}
-	a := m.Actions[action]
-	if a.Movement == nil || !a.Movement.Verified || !finite(a.Movement.StrideRatio) || a.Movement.StrideRatio <= 0 {
 		return false
 	}
 	// Different timing over the same walk rectangles is not a running drawing.
@@ -70,6 +74,39 @@ func HasRunAnimation(m *AnimationManifest, action, mood string) bool {
 		}
 	}
 	return false
+}
+func (e *BehaviorEngine) SetExperimentalMovement(enabled bool) { e.ExperimentalMovement = enabled }
+func (e *BehaviorEngine) canRun(i int, action string) bool {
+	s := e.States[i]
+	return HasRunAnimation(s.Player.Manifest, action, s.Mood) || (e.ExperimentalMovement && HasRunArtwork(s.Player.Manifest, action, s.Mood))
+}
+func (e *BehaviorEngine) movementSpeed(i int, action string) float64 {
+	s, c := e.States[i], e.Cats[i]
+	if strings.HasPrefix(action, "run_") && !HasRunAnimation(s.Player.Manifest, action, s.Mood) {
+		if e.ExperimentalMovement && HasRunArtwork(s.Player.Manifest, action, s.Mood) {
+			return float64(c.W) * .23
+		}
+		return 0
+	}
+	return LocomotionPixelsPerSecond(s.Player.Manifest, action, s.Mood, c.W)
+}
+func (e *BehaviorEngine) movementAction(i int, direction float64, preferRun bool) string {
+	s := e.States[i]
+	suffix := "right"
+	if direction < 0 {
+		suffix = "left"
+	}
+	run, walk := "run_"+suffix, "walk_"+suffix
+	if preferRun && e.canRun(i, run) {
+		return run
+	}
+	if HasAuthoredAction(s.Player.Manifest, walk, s.Mood) && HasWalkAnimation(s.Player.Manifest, walk, s.Mood) {
+		return walk
+	}
+	if e.canRun(i, run) {
+		return run
+	}
+	return ""
 }
 func frameIdentity(f AnimationFrame) [6]int {
 	if f.Rect != nil {
@@ -173,7 +210,7 @@ func (e *BehaviorEngine) decideAutonomy(i int, now float64) {
 			add(autonomousChoice{walk, "roam", 1 + s.Temperament.Energy*3, c.X + direction*distance, true})
 		}
 		run := "run_" + suffix
-		if HasRunAnimation(m, run, s.Mood) {
+		if e.canRun(i, run) {
 			weight := s.Temperament.Energy * .8
 			if e.Activity == ActivityLively {
 				weight *= 2
@@ -229,7 +266,7 @@ func (e *BehaviorEngine) decideAutonomy(i int, now float64) {
 		if selected.target < c.X {
 			c.Direction = -1
 		}
-		speed := LocomotionPixelsPerSecond(m, selected.action, s.Mood, c.W)
+		speed := e.movementSpeed(i, selected.action)
 		duration = math.Min(18, math.Abs(selected.target-c.X)/math.Max(1, speed)+.3)
 	}
 	s.Until = now + duration
@@ -257,7 +294,7 @@ func (e *BehaviorEngine) tickAutonomy(i int, now, dt, cursorX, cursorY float64) 
 					action = "walk_left"
 				}
 			}
-			e.moveToward(i, target, c.Y, LocomotionPixelsPerSecond(s.Player.Manifest, action, s.Mood, c.W)*dt)
+			e.moveToward(i, target, c.Y, e.movementSpeed(i, action)*dt)
 			if math.Abs(c.X-oldX) < .001 && dt > 0 {
 				e.finishAutonomy(i, now)
 			} else {
@@ -321,7 +358,7 @@ func (e *BehaviorEngine) configureSocial() {
 		}
 		s := e.States[i]
 		if strings.HasPrefix(action, "run_") {
-			return HasRunAnimation(s.Player.Manifest, action, s.Mood)
+			return e.canRun(i, action)
 		}
 		return HasAuthoredAction(s.Player.Manifest, action, s.Mood)
 	}
@@ -330,11 +367,8 @@ func (e *BehaviorEngine) configureSocial() {
 			if !e.valid(i) {
 				return false
 			}
-			s := e.States[i]
-			for _, action := range []string{"walk_left", "walk_right"} {
-				if !HasAuthoredAction(s.Player.Manifest, action, s.Mood) || !HasWalkAnimation(s.Player.Manifest, action, s.Mood) {
-					return false
-				}
+			if e.movementAction(i, -1, false) == "" || e.movementAction(i, 1, false) == "" {
+				return false
 			}
 		}
 		return true

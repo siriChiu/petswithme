@@ -48,12 +48,13 @@ type previewOptions struct {
 }
 
 type previewCat struct {
-	Spec     CatSpec
-	Atlas    *Atlas
-	Manifest *AnimationManifest
-	Player   *AnimationPlayer
-	Width    int
-	Height   int
+	Spec                 CatSpec
+	Atlas                *Atlas
+	Manifest             *AnimationManifest
+	Player               *AnimationPlayer
+	Width                int
+	Height               int
+	ExperimentalMovement bool
 }
 
 type previewCatMetadata struct {
@@ -298,7 +299,7 @@ func loadPreviewCats(root string, width int) ([]previewCat, error) {
 		if height > previewCanvasHeight-40 {
 			return nil, fmt.Errorf("cat %d (%q) is %dx%d at --width %d and does not fit the preview; reduce --width", i+1, spec.Name, width, height, width)
 		}
-		cats = append(cats, previewCat{Spec: spec, Atlas: atlas, Manifest: manifest, Player: NewAnimationPlayer(manifest), Width: width, Height: height})
+		cats = append(cats, previewCat{Spec: spec, Atlas: atlas, Manifest: manifest, Player: NewAnimationPlayer(manifest), Width: width, Height: height, ExperimentalMovement: cfg.ExperimentalMovement})
 	}
 	return cats, nil
 }
@@ -434,6 +435,10 @@ func previewLoopHasDistinctPixels(cat *previewCat, clip AnimationClip) bool {
 func previewGaitInfo(cat *previewCat, action, mood string, lane, frameCount, fps int) (previewGaitSource, error) {
 	clip := cat.Manifest.Resolve(action, mood)
 	info := previewGaitSource{Name: cat.Spec.Name, Lane: lane, PixelsPerSecond: WalkPixelsPerSecond(cat.Manifest, action, mood, cat.Width), LoopFrames: len(clip.Loop), BaselineY: (lane+1)*previewGaitLane - 24}
+	experimental := cat.ExperimentalMovement && strings.HasPrefix(action, "run_") && !HasRunAnimation(cat.Manifest, action, mood) && HasRunArtwork(cat.Manifest, action, mood)
+	if experimental {
+		info.PixelsPerSecond = float64(cat.Width) * .23
+	}
 	info.Top = info.BaselineY - cat.Height
 	if cat.Height > previewGaitLane-40 {
 		return info, fmt.Errorf("cat %q is %dpx tall and does not fit a %dpx gait lane; reduce --width", cat.Spec.Name, cat.Height, previewGaitLane)
@@ -454,7 +459,7 @@ func previewGaitInfo(cat *previewCat, action, mood string, lane, frameCount, fps
 	hasWalk := HasWalkAnimation(cat.Manifest, action, mood)
 	info.AutonomousEligible = HasAuthoredAction(cat.Manifest, action, mood) && hasWalk
 	if strings.HasPrefix(action, "run_") {
-		info.AutonomousEligible = HasRunAnimation(cat.Manifest, action, mood)
+		info.AutonomousEligible = HasRunAnimation(cat.Manifest, action, mood) || experimental
 	}
 	info.LegacySpeedFallback = movement == nil && hasWalk
 	info.EffectiveStrideRatio = info.PixelsPerSecond * info.CycleSeconds / float64(cat.Width)
@@ -473,6 +478,11 @@ func previewGaitInfo(cat *previewCat, action, mood string, lane, frameCount, fps
 	} else {
 		info.Status = "uncalibrated_legacy_speed"
 		info.Warning = "No stride metadata; using the application's uncalibrated legacy movement speed"
+	}
+	if experimental {
+		info.Calibrated = false
+		info.Status = "experimental_stylized_motion"
+		info.Warning = "Explicit experimental movement enabled: conservative trial speed, not calibrated; foot sliding may occur"
 	}
 	source := previewResolvedSource(*cat, action, mood)
 	if !previewLoopHasDistinctPixels(cat, clip) {
