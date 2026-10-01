@@ -388,21 +388,30 @@ type CatBehavior struct {
 	Player                         *AnimationPlayer
 	WasDragging                    bool
 	Ending                         bool
+	Temperament                    Temperament
+	TargetX                        float64
+	HasDestination                 bool
+	LastChoice                     string
+	ActionCooldown                 map[string]float64
+	AttentionUntil, AttentionAfter float64
+	AfterAction                    string
+	Autonomous                     bool
 }
 type BehaviorEngine struct {
 	Cats     []*Cat
 	States   []*CatBehavior
 	Manifest *AnimationManifest
 	Social   *SocialCoordinator
+	Activity ActivityLevel
 }
 
 func NewBehaviorEngine(cats []*Cat, m *AnimationManifest) *BehaviorEngine {
 	if m == nil {
 		m = DefaultAnimationManifest()
 	}
-	e := &BehaviorEngine{Cats: cats, Manifest: m, Social: NewSocialCoordinator()}
+	e := &BehaviorEngine{Cats: cats, Manifest: m, Social: NewSocialCoordinator(), Activity: ActivityNormal}
 	for i := range cats {
-		e.States = append(e.States, &CatBehavior{Action: "idle", Mood: "calm", Priority: PriorityIdle, NextDecision: 8 + float64(i)*3, Player: NewAnimationPlayer(m)})
+		e.States = append(e.States, &CatBehavior{Action: "idle", Mood: "calm", Priority: PriorityIdle, NextDecision: 2 + float64(i)*1.3, Player: NewAnimationPlayer(m), Temperament: DefaultTemperament(i), ActionCooldown: map[string]float64{}})
 		e.States[i].Player.Tick(float64(i) * .17)
 	}
 	return e
@@ -419,6 +428,8 @@ func (e *BehaviorEngine) SetManifest(i int, m *AnimationManifest) bool {
 	s.Player.Manifest = m
 	s.Player.Play(s.Action, s.Mood)
 	s.Ending = false
+	s.HasDestination = false
+	s.AfterAction = ""
 	return true
 }
 func (e *BehaviorEngine) Cancel(i int, now float64) {
@@ -432,6 +443,9 @@ func (e *BehaviorEngine) Cancel(i int, now float64) {
 	s.Until = 0
 	s.Ending = false
 	s.NextDecision = now + 8
+	s.HasDestination = false
+	s.AfterAction = ""
+	s.Autonomous = false
 	s.Player.Play("idle", s.Mood)
 }
 func (e *BehaviorEngine) Pet(i int, now float64) {
@@ -458,6 +472,9 @@ func (e *BehaviorEngine) Request(i int, action string, priority BehaviorPriority
 		return false
 	}
 	s := e.States[i]
+	if !HasAuthoredAction(s.Player.Manifest, action, s.Mood) {
+		return false
+	}
 	if s.WasDragging {
 		e.Cancel(i, now)
 		s.WasDragging = false
@@ -470,6 +487,9 @@ func (e *BehaviorEngine) Request(i int, action string, priority BehaviorPriority
 	s.Priority = priority
 	s.Until = now + duration
 	s.Ending = false
+	s.HasDestination = false
+	s.AfterAction = ""
+	s.Autonomous = false
 	// A fresh release-click can arrive before the next timer sees Dragging=false.
 	// It replaces the drag instead of being mistaken for stale pre-drag work.
 	s.WasDragging = false
@@ -490,6 +510,7 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		dt = 0
 	}
 	dt = math.Min(dt, .25)
+	quiet = quiet || e.Activity == ActivityQuiet
 	blocked := make([]bool, len(e.Cats))
 	for i, c := range e.Cats {
 		if c == nil {
@@ -497,6 +518,9 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 			continue
 		}
 		s := e.States[i]
+		if quiet && s.Autonomous {
+			e.Cancel(i, now)
+		}
 		if c.Dragging {
 			if !s.WasDragging {
 				e.Cancel(i, now)
@@ -529,10 +553,21 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 				s.Until = 0
 				s.Ending = false
 				s.Mood = "calm"
+				if s.AfterAction != "" && !quiet && idleSeconds < 180 {
+					next := s.AfterAction
+					s.AfterAction = ""
+					if HasAuthoredAction(s.Player.Manifest, next, s.Mood) {
+						s.Action = next
+						s.Until = now + actionCycle(s.Player.Manifest, next, s.Mood)
+						s.NextDecision = s.Until + e.dwell(i)
+					}
+				}
+				s.AfterAction = ""
 			}
 		}
 		blocked[i] = c.Dragging || (s.Priority >= PriorityPlay && (now < s.Until || s.Ending))
 	}
+	e.configureSocial()
 	intents := e.Social.Tick(e.Cats, blocked, now, dt, quiet || idleSeconds >= 180)
 	out := make([]BehaviorFrame, len(e.Cats))
 	for i, c := range e.Cats {
@@ -547,17 +582,20 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		case blocked[i]:
 			action = s.Action
 		case quiet || idleSeconds >= 180:
-			s.Action = "sleep"
+			s.Action = e.restingAction(i)
+			s.HasDestination = false
 			s.Priority = PriorityIdle
+			s.Until = 0
 			s.NextDecision = now + 5
 			s.Mood = "sleepy"
-			action = "sleep"
+			action = s.Action
 		default:
 			if intent, ok := intents[i]; ok {
 				s.Action = intent.Action
+				s.HasDestination = false
 				s.Priority = PrioritySocial
 				s.Until = now + .5
-				action = intent.Action
+				action = e.socialAction(i, intent.Action)
 				if intent.Move {
 					direction := intent.TargetX - c.X
 					if direction < 0 {
@@ -565,87 +603,24 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 					} else {
 						action = "walk_right"
 					}
+					if intent.Action == "chase" {
+						action = "run_right"
+						if direction < 0 {
+							action = "run_left"
+						}
+					}
 					oldX, oldY := c.X, c.Y
 					if math.Hypot(intent.TargetX-c.X, intent.TargetY-c.Y) <= 1 {
 						action = "idle"
 					} else {
-						e.moveToward(i, intent.TargetX, intent.TargetY, WalkPixelsPerSecond(s.Player.Manifest, action, s.Mood, c.W)*dt)
+						e.moveToward(i, intent.TargetX, intent.TargetY, LocomotionPixelsPerSecond(s.Player.Manifest, action, s.Mood, c.W)*dt)
 						if math.Hypot(c.X-oldX, c.Y-oldY) < .01 {
 							action = "idle"
 						}
 					}
 				}
 			} else {
-				if s.Priority == PrioritySocial || s.Action == "sleep" {
-					s.Priority = PriorityIdle
-					s.Action = "idle"
-					s.NextDecision = now + 5
-					s.Mood = "calm"
-				}
-				if s.Priority == PriorityWander {
-					if now >= s.Until {
-						s.Priority = PriorityIdle
-						s.Action = "idle"
-						s.NextDecision = now + 10 + c.Seed.Float64()*15
-					} else {
-						action = "walk_right"
-						if c.Direction < 0 {
-							action = "walk_left"
-						}
-						oldX := c.X
-						e.moveToward(i, c.X+c.Direction*100, c.Y, WalkPixelsPerSecond(s.Player.Manifest, action, s.Mood, c.W)*dt)
-						if math.Abs(c.X-oldX) < .01 {
-							s.Priority = PriorityIdle
-							s.Action = "idle"
-							s.Until = 0
-							s.NextDecision = now + 3 + c.Seed.Float64()*5
-							c.Direction *= -1
-						}
-					}
-				}
-				if s.Priority == PriorityIdle && now >= s.NextDecision {
-					choice := c.Seed.Intn(6)
-					s.Until = now + 3 + c.Seed.Float64()*3
-					s.NextDecision = s.Until + 10 + c.Seed.Float64()*12
-					switch choice {
-					case 0, 1:
-						s.Priority = PriorityWander
-						s.Action = "walk_right"
-						c.Direction = 1
-						if c.Seed.Intn(2) == 0 {
-							c.Direction = -1
-							s.Action = "walk_left"
-						}
-					case 2:
-						s.Action = "curious"
-					case 3:
-						s.Action = "waiting"
-					case 4:
-						s.Action = "sit"
-					default:
-						s.Action = "rest"
-					}
-				}
-				if s.Priority == PriorityIdle && s.Until > 0 && now >= s.Until {
-					s.Action = "idle"
-					s.Until = 0
-				}
-				action = s.Action
-				if s.Priority == PriorityWander {
-					if c.Direction < 0 {
-						action = "walk_left"
-					} else {
-						action = "walk_right"
-					}
-				}
-				dx, dy := cursorX-(c.X+float64(c.W)/2), cursorY-(c.Y+float64(c.H)/2)
-				if s.Priority <= PriorityWander && (dx*dx+dy*dy < 420*420 || now < s.GazeUntil) && math.Abs(dx)+math.Abs(dy) > 15 {
-					s.Action = "idle"
-					s.Priority = PriorityIdle
-					s.NextDecision = math.Max(s.NextDecision, now+4)
-					action = "idle"
-					action = fmt.Sprintf("gaze_%d", GazeDirection(dx, dy))
-				}
+				action = e.tickAutonomy(i, now, dt, cursorX, cursorY)
 			}
 		}
 		c.Mode = action
@@ -718,6 +693,7 @@ type SocialPlan struct {
 	Phase                            string
 	Started, PhaseUntil, Destination float64
 	Bounds                           Rect
+	Chase                            bool
 }
 type SocialCoordinator struct {
 	Plans        map[uint64]*SocialPlan
@@ -725,10 +701,14 @@ type SocialCoordinator struct {
 	Cooldown     map[int]float64
 	NextAttempt  float64
 	generation   uint64
+	Activity     ActivityLevel
+	Eligible     func(int, int) bool
+	Supports     func(int, string) bool
+	Sociability  []float64
 }
 
 func NewSocialCoordinator() *SocialCoordinator {
-	return &SocialCoordinator{Plans: map[uint64]*SocialPlan{}, Reservations: map[int]uint64{}, Cooldown: map[int]float64{}, NextAttempt: 15}
+	return &SocialCoordinator{Plans: map[uint64]*SocialPlan{}, Reservations: map[int]uint64{}, Cooldown: map[int]float64{}, NextAttempt: 8, Activity: ActivityNormal}
 }
 func (s *SocialCoordinator) Cancel(index int, now float64) {
 	id, ok := s.Reservations[index]
@@ -743,14 +723,21 @@ func (s *SocialCoordinator) Cancel(index int, now float64) {
 	delete(s.Plans, id)
 	delete(s.Reservations, p.A)
 	delete(s.Reservations, p.B)
-	s.Cooldown[p.A] = now + 35
-	s.Cooldown[p.B] = now + 35
+	cooldown := 25.0
+	if s.Activity == ActivityLively {
+		cooldown = 12
+	}
+	s.Cooldown[p.A] = now + cooldown
+	s.Cooldown[p.B] = now + cooldown
 }
 func (s *SocialCoordinator) Start(cats []*Cat, a, b int, now float64) bool {
 	if a == b || a < 0 || b < 0 || a >= len(cats) || b >= len(cats) || cats[a] == nil || cats[b] == nil {
 		return false
 	}
 	ca, cb := cats[a], cats[b]
+	if s.Eligible != nil && !s.Eligible(a, b) {
+		return false
+	}
 	_, ar := s.Reservations[a]
 	_, br := s.Reservations[b]
 	if ar || br || ca.Dragging || cb.Dragging || now < s.Cooldown[a] || now < s.Cooldown[b] || ca.Bounds != cb.Bounds {
@@ -771,12 +758,36 @@ func (s *SocialCoordinator) Start(cats []*Cat, a, b int, now float64) bool {
 	}
 	s.generation++
 	p := &SocialPlan{ID: s.generation, A: a, B: b, Leader: b, Phase: "approach", Started: now, PhaseUntil: now + 10, Bounds: ca.Bounds}
+	if s.Supports != nil && s.Supports(a, "run_left") && s.Supports(a, "run_right") && s.Supports(b, "run_left") && s.Supports(b, "run_right") {
+		chance := .2
+		if s.Activity == ActivityLively {
+			chance = .6
+		}
+		p.Chase = ca.Seed.Float64() < chance
+	}
 	s.Plans[p.ID] = p
 	s.Reservations[a] = p.ID
 	s.Reservations[b] = p.ID
 	return true
 }
 func socialGap(a, b *Cat) float64 { return math.Max(10, float64(max(a.W, b.W))*.12) }
+func (s *SocialCoordinator) beginFollowing(p *SocialPlan, a, b *Cat, now float64) {
+	p.Phase = "follow"
+	if p.Chase {
+		p.Phase = "chase"
+	}
+	p.PhaseUntil = now + 3 + a.Seed.Float64()*4
+	right := float64(b.Bounds.Right-b.W) - b.X
+	left := a.X - float64(a.Bounds.Left)
+	distance := float64(max(a.W, b.W)) * (.6 + a.Seed.Float64()*1.8)
+	if left > right {
+		p.Leader = p.A
+		p.Destination = math.Max(float64(a.Bounds.Left), a.X-distance)
+	} else {
+		p.Leader = p.B
+		p.Destination = math.Min(float64(b.Bounds.Right-b.W), b.X+distance)
+	}
+}
 func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, quiet bool) map[int]SocialIntent {
 	intents := map[int]SocialIntent{}
 	isBlocked := func(i int) bool {
@@ -792,7 +803,7 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 		if p == nil {
 			continue
 		}
-		if quiet || isBlocked(p.A) || isBlocked(p.B) || cats[p.A].Bounds != p.Bounds || cats[p.B].Bounds != p.Bounds {
+		if quiet || isBlocked(p.A) || isBlocked(p.B) || cats[p.A].Bounds != p.Bounds || cats[p.B].Bounds != p.Bounds || (s.Eligible != nil && !s.Eligible(p.A, p.B)) {
 			s.Cancel(p.A, now)
 			continue
 		}
@@ -804,6 +815,9 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 			if distance >= gap-2 && distance <= gap+5 {
 				p.Phase = "greet"
 				p.PhaseUntil = now + 2.4
+				if s.Supports != nil && (!s.Supports(p.A, "greet") || !s.Supports(p.B, "greet")) {
+					s.beginFollowing(p, a, b, now)
+				}
 			} else if now >= p.PhaseUntil {
 				s.Cancel(p.A, now)
 				continue
@@ -817,22 +831,12 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 			}
 		case "greet":
 			if now >= p.PhaseUntil {
-				p.Phase = "follow"
-				p.PhaseUntil = now + 4
-				right := float64(b.Bounds.Right-b.W) - b.X
-				left := a.X - float64(a.Bounds.Left)
-				if left > right {
-					p.Leader = p.A
-					p.Destination = math.Max(float64(a.Bounds.Left), a.X-float64(a.W)*.8)
-				} else {
-					p.Leader = p.B
-					p.Destination = math.Min(float64(b.Bounds.Right-b.W), b.X+float64(b.W)*.8)
-				}
+				s.beginFollowing(p, a, b, now)
 			}
-		case "follow":
+		case "follow", "chase":
 			if now >= p.PhaseUntil {
 				p.Phase = "rest"
-				p.PhaseUntil = now + 5
+				p.PhaseUntil = now + 3 + a.Seed.Float64()*6
 			}
 		case "rest":
 			if now >= p.PhaseUntil {
@@ -844,13 +848,13 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 		case "greet":
 			intents[p.A] = SocialIntent{Action: "greet"}
 			intents[p.B] = SocialIntent{Action: "greet"}
-		case "follow":
+		case "follow", "chase":
 			if p.Leader == p.B {
-				intents[p.B] = SocialIntent{"follow", p.Destination, b.Y, true}
-				intents[p.A] = SocialIntent{"follow", b.X - float64(a.W) - gap, a.Y, true}
+				intents[p.B] = SocialIntent{p.Phase, p.Destination, b.Y, true}
+				intents[p.A] = SocialIntent{p.Phase, b.X - float64(a.W) - gap, a.Y, true}
 			} else {
-				intents[p.A] = SocialIntent{"follow", p.Destination, a.Y, true}
-				intents[p.B] = SocialIntent{"follow", a.X + float64(a.W) + gap, b.Y, true}
+				intents[p.A] = SocialIntent{p.Phase, p.Destination, a.Y, true}
+				intents[p.B] = SocialIntent{p.Phase, a.X + float64(a.W) + gap, b.Y, true}
 			}
 		case "rest":
 			intents[p.A] = SocialIntent{Action: "social_rest"}
@@ -863,15 +867,34 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 	}
 	if now >= s.NextAttempt {
 		s.NextAttempt = now + 12
-		started := false
-		for a := 0; a < len(cats) && !started; a++ {
-			if isBlocked(a) {
-				continue
+		order := make([]int, 0, len(cats))
+		for i, c := range cats {
+			if c != nil {
+				order = append(order, i)
 			}
-			for b := a + 1; b < len(cats); b++ {
-				if !isBlocked(b) && s.Start(cats, a, b, now) {
-					started = true
-					break
+		}
+		if len(order) > 0 {
+			rng := cats[order[0]].Seed
+			rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+			delay := 8 + rng.Float64()*12
+			if s.Activity == ActivityLively {
+				delay *= .55
+			}
+			s.NextAttempt = now + delay
+			started := false
+			for ai, a := range order {
+				if started || isBlocked(a) {
+					continue
+				}
+				for _, b := range order[ai+1:] {
+					affinity := .65
+					if a < len(s.Sociability) && b < len(s.Sociability) {
+						affinity = (s.Sociability[a] + s.Sociability[b]) / 2
+					}
+					if !isBlocked(b) && rng.Float64() < .15+.8*affinity && s.Start(cats, a, b, now) {
+						started = true
+						break
+					}
 				}
 			}
 		}

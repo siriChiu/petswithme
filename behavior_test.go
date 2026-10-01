@@ -183,7 +183,7 @@ func TestBehaviorPriorityAndQuiet(t *testing.T) {
 	e := NewBehaviorEngine(behaviorCats(1), nil)
 	x := e.Cats[0].X
 	out := quietCursor(e, 100, .1, true)
-	if out[0].Action != "sleep" || e.Cats[0].X != x {
+	if out[0].Action != "idle" || e.Cats[0].X != x {
 		t.Fatal("quiet did not stop autonomous movement")
 	}
 	e.Play(0, 101)
@@ -211,7 +211,7 @@ func TestBehaviorPriorityAndQuiet(t *testing.T) {
 	}
 	e.Cats[0].Dragging = false
 	out = quietCursor(e, 103, .1, true)
-	if out[0].Action != "sleep" {
+	if out[0].Action != "idle" {
 		t.Fatal("stale pet/play resumed after drag")
 	}
 }
@@ -274,7 +274,9 @@ func TestBehaviorSocialRejectsOtherMonitorAndDistantCats(t *testing.T) {
 }
 func TestBehaviorSocialFlowAndCollision(t *testing.T) {
 	cats := behaviorCats(2)
-	e := NewBehaviorEngine(cats, nil)
+	m := DefaultAnimationManifest()
+	m.Actions["greet"] = AnimationAction{AnimationClip: atlasLoop(3, 200)}
+	e := NewBehaviorEngine(cats, m)
 	e.Social.NextAttempt = 1000
 	if !e.Social.Start(cats, 0, 1, 0) {
 		t.Fatal("cannot start")
@@ -404,6 +406,7 @@ func TestBehaviorOverlappingDragPositionOnlySeparates(t *testing.T) {
 func TestBehaviorWakePlaysSleepEnd(t *testing.T) {
 	m := DefaultAnimationManifest()
 	sleep := m.Actions["sleep"]
+	sleep.DemoFallback = false
 	sleep.End = []AnimationFrame{{Row: 0, Col: 2, DurationMS: 100}, {Row: 0, Col: 1, DurationMS: 100}}
 	m.Actions["sleep"] = sleep
 	c := NewCat(0, 100, 108, Rect{0, 0, 1000, 800})

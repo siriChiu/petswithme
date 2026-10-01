@@ -56,7 +56,8 @@ rect, and an optional normalized anchor override. All rectangles are validated
 against image bounds; invalid actions/fallback cycles fail loading with a clear
 error. Missing requested actions use the manifest's declared global fallback.
 
-Behavior names: idle, walk_left, walk_right, drag, pet, play, sleep, sit, rest,
+Behavior names: idle, walk_left, walk_right, run_left, run_right, drag, pet, play,
+sleep, sit, getup, rest, pounce,
 greet, social_rest, curious, waiting, groom, stretch, and gaze_0 through gaze_15.
 Each cat has its own animation cursor and interruption generation, even when art
 is shared. Explicit actions finish their end phase; urgent interruptions replace
@@ -102,3 +103,23 @@ tails. Validation rejects ground alignment that would clip visible pixels.
 The same composition and recorded source-to-window transform are used in the
 native app and motion previews. Keep explanatory notes in separate QA files;
 unknown manifest fields are rejected.
+
+## Autonomous action availability
+
+The engine schedules only directly authored actions (`loop` or a mood loop, with
+`demoFallback` false). An alias to a different action does not qualify as new
+artwork. Neighboring gaze aliases are the narrow exception. All mandatory
+interaction priorities and fallback validation remain in effect. A missing
+resting pose produces idle, rather than claiming to sleep or groom.
+
+A run needs its own `run_left` / `run_right` loop with at least two distinct
+references, not just the walk references at shorter durations. It also requires
+its own `movement.strideRatio` and `movement.verified: true`. This is a scheduling
+gate, not automated visual approval: the pack author must review anatomy and
+visible sole contacts before declaring verification. Unverified trial run art
+can be inspected separately but is not autonomously enabled.
+
+`cats.json` may include per-cat `temperament: {"energy":0.6,"sociability":0.5,
+"curiosity":0.7}`. Each value must be finite and between 0 and 1. Activity and
+temperament change choice probabilities and pause durations, not frame timing or
+calibrated stride speed. Old settings with only `quiet` continue to load.

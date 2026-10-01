@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-const appVersion = "0.2.0-preview"
+const appVersion = "0.3.0-preview"
 
 var rowFrames = [11]int{6, 8, 8, 4, 5, 8, 6, 6, 5, 8, 8}
 
@@ -49,10 +49,11 @@ func GazeDirection(dx, dy float64) int {
 }
 
 type CatSpec struct {
-	Name       string `json:"name"`
-	Sprite     string `json:"sprite"`
-	Animations string `json:"animations,omitempty"`
-	Demo       bool   `json:"demo"`
+	Name        string       `json:"name"`
+	Sprite      string       `json:"sprite"`
+	Animations  string       `json:"animations,omitempty"`
+	Demo        bool         `json:"demo"`
+	Temperament *Temperament `json:"temperament,omitempty"`
 }
 type Config struct {
 	Version int       `json:"version"`
@@ -88,6 +89,11 @@ func LoadConfig(dir string) (Config, error) {
 	}
 	for i := range custom.Cats {
 		s := &custom.Cats[i]
+		if s.Temperament != nil {
+			if err := s.Temperament.Validate(); err != nil {
+				return c, fmt.Errorf("cat %d: %w", i+1, err)
+			}
+		}
 		s.Name = strings.TrimSpace(s.Name)
 		if s.Name == "" || strings.ContainsRune(s.Name, 0) || len([]rune(s.Name)) > 40 {
 			return c, fmt.Errorf("cat %d needs a name of 1 to 40 characters", i+1)
@@ -113,8 +119,9 @@ func LoadConfig(dir string) (Config, error) {
 }
 
 type Settings struct {
-	Quiet bool `json:"quiet"`
-	Size  int  `json:"size"`
+	Quiet    bool          `json:"quiet"`
+	Size     int           `json:"size"`
+	Activity ActivityLevel `json:"activity,omitempty"`
 }
 
 func ValidSize(s int) int {
@@ -124,7 +131,7 @@ func ValidSize(s int) int {
 	return 144
 }
 func SaveSettings(path string, s Settings) error {
-	s.Size = ValidSize(s.Size)
+	s = NormalizeSettings(s)
 	if e := os.MkdirAll(filepath.Dir(path), 0700); e != nil {
 		return e
 	}
@@ -143,8 +150,7 @@ func LoadSettings(path string) Settings {
 	if b, e := readBoundedFile(path, 4096); e == nil {
 		_ = json.Unmarshal(b, &s)
 	}
-	s.Size = ValidSize(s.Size)
-	return s
+	return NormalizeSettings(s)
 }
 
 type Atlas struct {

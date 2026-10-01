@@ -423,3 +423,43 @@ func TestPreviewTrialStrideIsNotCalledVerified(t *testing.T) {
 		t.Fatalf("trial called verified: %+v", info)
 	}
 }
+
+func TestPreviewRunDiagnosticStaysExplicitlyUnverified(t *testing.T) {
+	root := previewTestPack(t)
+	cats, err := loadPreviewCats(root, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := &cats[0]
+	a := cat.Manifest.Actions["idle"]
+	a.Movement = &AnimationMovement{StrideRatio: .4, Verified: false}
+	cat.Manifest.Actions["run_left"] = a
+	info, err := previewGaitInfo(cat, "run_left", "calm", 0, 4, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.AutonomousEligible || info.Calibrated || info.PixelsPerSecond <= 0 || info.EndX >= info.StartX || !strings.Contains(info.Warning, "diagnostic only") {
+		t.Fatalf("misleading run diagnostic: %+v", info)
+	}
+	opts := previewTestOptions(root, t.TempDir())
+	opts.GaitOnly = true
+	opts.GaitActions = "walk_right,run_right,run_left"
+	if err := validatePreviewOptions(opts); err != nil {
+		t.Fatal(err)
+	}
+	scenes := previewSchedule(opts, cats)
+	if len(scenes) != 3 || scenes[1].Action != "run_right" || scenes[2].Action != "run_left" {
+		t.Fatal("run schedule lost")
+	}
+	for _, bad := range []string{"run", "play", "walk_right,", "walk_left,walk_left,walk_left,walk_left,walk_left"} {
+		opts.GaitActions = bad
+		if validatePreviewOptions(opts) == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+	opts.GaitActions = "run_right"
+	opts.GaitOnly = false
+	if validatePreviewOptions(opts) == nil {
+		t.Fatal("run selection accepted outside gait mode")
+	}
+}

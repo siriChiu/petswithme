@@ -6,6 +6,9 @@
 - Independent per-cat timing, start/loop/end and interruption generations
 - Fallback-cycle/rectangle/duration validation
 - Same-monitor social reservation, cancellation, cooldown and collision guards
+- Seeded random destinations, dwell variation, repeated-action avoidance and activity-rate simulations
+- Real-action gates, separate verified running, quiet cancellation and sit/get-up end transitions
+- Legacy quiet-setting migration and per-cat temperament validation
 - Premultiplied BGRA ordering and alpha hit-threshold conversion
 - Negative-coordinate monitor bounds, settings and config validation
 - Windows x64 GUI cross-compilation without cgo
@@ -15,7 +18,7 @@
 
 Observed pass on 2026-10-01: [run 36811633388](https://github.com/siriChiu/petswithme/actions/runs/36811633388), Windows Server 2025. Both native lifecycle and per-pixel alpha-hit tests executed and passed, not skipped. The private-art test was intentionally skipped in the public repo; it passes locally with the private demo atlas.
 
-The subsequent full-app subprocess test runs real main, config/PNG loading, tray setup, three pets, quiet/hide/show/reset/play/size/quit and cleanup, with isolated preferences and synthetic art. It reports an explicit skip only if the runner lacks an interactive tray desktop.
+The subsequent full-app subprocess test runs real main, config/PNG loading, tray setup, three pets, quiet/normal/lively/hide/show/reset/play/size/quit and cleanup, with isolated preferences and synthetic art. It reports an explicit skip only if the runner lacks an interactive tray desktop.
 
 The workflow runs tests on windows-latest using synthetic in-memory QA pixels,
 not private cat art. It exercises layered window creation/update, styles,

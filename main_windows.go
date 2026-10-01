@@ -7,6 +7,7 @@ import (
 	"embed"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -397,7 +398,9 @@ func menu() {
 		label = "顯示貓咪"
 	}
 	add(100, label, false)
-	add(101, "安靜模式（停止散步）", app.Settings.Quiet)
+	add(101, "安靜（停止自主活動）", app.Settings.Activity == ActivityQuiet)
+	add(106, "一般活動", app.Settings.Activity == ActivityNormal)
+	add(107, "活潑（更常探索與互動）", app.Settings.Activity == ActivityLively)
 	add(102, "把貓咪帶回滑鼠所在螢幕", false)
 	add(105, "一起玩一下", false)
 	appendMenu.Call(h, 0x800, 0, 0)
@@ -413,15 +416,33 @@ func menu() {
 	postMessage.Call(app.Controller, 0, 0, 0)
 	command(int(id))
 }
+func changeActivity(level ActivityLevel) {
+	if !ValidActivity(level) {
+		return
+	}
+	app.Settings.Activity = level
+	app.Settings.Quiet = level == ActivityQuiet
+	if app.Engine != nil {
+		app.Engine.SetActivity(level)
+	}
+	save()
+	setInterval()
+	tick()
+}
 func command(id int) {
 	switch id {
 	case 100:
 		toggleHidden()
 	case 101:
-		app.Settings.Quiet = !app.Settings.Quiet
-		save()
-		setInterval()
-		tick()
+		level := ActivityQuiet
+		if app.Settings.Quiet {
+			level = ActivityNormal
+		}
+		changeActivity(level)
+	case 106:
+		changeActivity(ActivityNormal)
+	case 107:
+		changeActivity(ActivityLively)
 	case 102:
 		reset()
 	case 105:
@@ -447,7 +468,7 @@ func command(id int) {
 		for i, p := range app.Pets {
 			specs[i] = p.Spec
 		}
-		messageBox.Call(app.Controller, uintptr(unsafe.Pointer(utf("三貓桌面陪伴 "+appVersion+"\n\n點一下：摸摸／揮手回應\n點兩下：玩一下\n按住拖曳：移動貓咪\n右鍵貓咪或右下角圖示：選單\n系統閒置約 3 分鐘：打盹\n安靜模式：停止散步，仍可摸摸和拖曳\n\n"+CharacterSummary(specs)+"\n\n完全離線，不擷取畫面、文字或按鍵。\n只讀滑鼠位置、拖曳時的滑鼠按鈕與系統閒置秒數。\n沒有自動開機啟動、廣告或更新下載。\n\n已通過 Windows 原生透明視窗與基本生命週期測試；多螢幕操作與最終素材仍待實機驗證。"))), uintptr(unsafe.Pointer(utf(appTitle))), 0x40)
+		messageBox.Call(app.Controller, uintptr(unsafe.Pointer(utf("三貓桌面陪伴 "+appVersion+"\n\n點一下：摸摸／揮手回應\n點兩下：玩一下\n按住拖曳：移動貓咪\n右鍵貓咪或右下角圖示：選單\n系統閒置約 3 分鐘：打盹\n活動選單：安靜／一般／活潑\n活潑會更常探索，仍可摸摸和拖曳\n新動作需有對應素材；跑步不會拿散步加速代替\n\n"+CharacterSummary(specs)+"\n\n完全離線，不擷取畫面、文字或按鍵。\n只讀滑鼠位置、拖曳時的滑鼠按鈕與系統閒置秒數。\n沒有自動開機啟動、廣告或更新下載。\n\n已通過 Windows 原生透明視窗與基本生命週期測試；多螢幕操作與最終素材仍待實機驗證。"))), uintptr(unsafe.Pointer(utf(appTitle))), 0x40)
 	case 104:
 		quit()
 	}
@@ -762,6 +783,8 @@ func main() {
 		h := w * canvasH / canvasW
 		w, h = FitSize(w, h, r)
 		c := NewCat(i, w, h, r)
+		// Unit simulations use NewCat's fixed seed; each real launch varies choices.
+		c.Seed = rand.New(rand.NewSource(time.Now().UnixNano() + int64(i)*7919))
 		p := &PetWindow{Cat: c, Atlas: atlas, Spec: spec, Manifest: manifest, Index: i, CanvasW: canvasW, CanvasH: canvasH, LastX: -99999, LastY: -99999}
 		p.HWND, _, e = createWindow.Call(0x00080000|0x00000080|0x08000000|0x00000008, uintptr(unsafe.Pointer(utf("ThreeCatCompanionPet"))), uintptr(unsafe.Pointer(utf(spec.Name))), 0x80000000, signed(int(c.X)), signed(int(c.Y)), uintptr(w), uintptr(h), 0, 0, app.Instance, 0)
 		if p.HWND == 0 {
@@ -784,8 +807,12 @@ func main() {
 		cats[i] = p.Cat
 	}
 	app.Engine = NewBehaviorEngine(cats, DefaultAnimationManifest())
+	app.Engine.SetActivity(app.Settings.Activity)
 	for i, p := range app.Pets {
 		app.Engine.SetManifest(i, p.Manifest)
+		if p.Spec.Temperament != nil {
+			app.Engine.SetTemperament(i, *p.Spec.Temperament)
+		}
 	}
 	setInterval()
 	var msg Message

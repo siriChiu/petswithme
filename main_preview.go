@@ -20,6 +20,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -43,6 +44,7 @@ type previewOptions struct {
 	ActionDuration time.Duration
 	GazeDuration   time.Duration
 	GaitOnly       bool
+	GaitActions    string
 }
 
 type previewCat struct {
@@ -102,6 +104,7 @@ type previewGaitSource struct {
 	Calibrated           bool     `json:"calibrated"`
 	Status               string   `json:"status"`
 	Warning              string   `json:"warning,omitempty"`
+	AutonomousEligible   bool     `json:"eligible_for_autonomous_motion"`
 	StartX               float64  `json:"start_x"`
 	EndX                 float64  `json:"end_x_at_scene_boundary"`
 	Top                  int      `json:"top"`
@@ -168,6 +171,7 @@ func previewMain(args []string, stdout, stderr io.Writer) error {
 	fs.DurationVar(&opts.ActionDuration, "action-duration", 3*time.Second, "duration of each action, for example 3s")
 	fs.DurationVar(&opts.GazeDuration, "gaze-duration", 4800*time.Millisecond, "duration of the complete 16-direction gaze sweep, for example 4.8s")
 	fs.BoolVar(&opts.GaitOnly, "gait-only", false, "review translated right/left walks at app speed in three 900x220 ground-marked lanes")
+	fs.StringVar(&opts.GaitActions, "gait-actions", "", "gait-only actions: comma-separated walk_right,walk_left,run_right,run_left; trial runs remain diagnostic only")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: go run -tags motionpreview . --root PRIVATE_PACK --out EMPTY_OUTPUT [options]")
 		fs.PrintDefaults()
@@ -205,6 +209,20 @@ func previewMain(args []string, stdout, stderr io.Writer) error {
 }
 
 func validatePreviewOptions(opts previewOptions) error {
+	if opts.GaitActions != "" {
+		if !opts.GaitOnly {
+			return errors.New("--gait-actions requires --gait-only")
+		}
+		actions := strings.Split(opts.GaitActions, ",")
+		if len(actions) > 4 {
+			return errors.New("--gait-actions supports at most four actions")
+		}
+		for _, action := range actions {
+			if action != "walk_left" && action != "walk_right" && action != "run_left" && action != "run_right" {
+				return fmt.Errorf("unsupported gait action %q", action)
+			}
+		}
+	}
 	if opts.Root == "" || opts.Out == "" {
 		return errors.New("--root and --out are required; no demo artwork is substituted")
 	}
@@ -328,8 +346,13 @@ func previewSchedule(opts previewOptions, cats []previewCat) []previewScene {
 		nextFrame += count
 	}
 	if opts.GaitOnly {
-		add("walk_right", "walk_right", "calm", framesPerAction)
-		add("walk_left", "walk_left", "calm", framesPerAction)
+		actions := opts.GaitActions
+		if actions == "" {
+			actions = "walk_right,walk_left"
+		}
+		for _, action := range strings.Split(actions, ",") {
+			add(action, action, "calm", framesPerAction)
+		}
 		return scenes
 	}
 	for _, action := range []string{"idle", "walk_right", "walk_left", "pet", "drag", "play", "sleep"} {
@@ -429,6 +452,10 @@ func previewGaitInfo(cat *previewCat, action, mood string, lane, frameCount, fps
 	info.MovementSource = movementSource
 	info.MovementFallback = movement != nil && movementSource != action
 	hasWalk := HasWalkAnimation(cat.Manifest, action, mood)
+	info.AutonomousEligible = HasAuthoredAction(cat.Manifest, action, mood) && hasWalk
+	if strings.HasPrefix(action, "run_") {
+		info.AutonomousEligible = HasRunAnimation(cat.Manifest, action, mood)
+	}
 	info.LegacySpeedFallback = movement == nil && hasWalk
 	info.EffectiveStrideRatio = info.PixelsPerSecond * info.CycleSeconds / float64(cat.Width)
 	info.RootPixelsPerSample = info.PixelsPerSecond / float64(fps)
@@ -464,9 +491,12 @@ func previewGaitInfo(cat *previewCat, action, mood string, lane, frameCount, fps
 			info.Warning += "; the application still translates these distinct source references, shown for diagnosis only"
 		}
 	}
+	if strings.HasPrefix(action, "run_") && !info.AutonomousEligible {
+		info.Warning += "; this run is diagnostic only and is not eligible for autonomous application movement"
+	}
 	info.StartX = previewGaitMargin
 	direction := 1.0
-	if action == "walk_left" {
+	if strings.HasSuffix(action, "_left") {
 		info.StartX = float64(previewCanvasWidth - previewGaitMargin - cat.Width)
 		direction = -1
 	}
@@ -505,7 +535,7 @@ func renderMotionPreview(opts previewOptions) (*previewMetadata, error) {
 	if opts.GaitOnly {
 		meta.GaitOnly = true
 		meta.CanvasHeight = previewGaitHeight
-		meta.Notes = []string{"All artwork is read from the supplied private pack; baseline and tick marks are diagnostic UI guides only.", "Cats translate at WalkPixelsPerSecond from the application, without speed adjustment, clipping, clamping, or wrapping. This is a deterministic gait review, not a native Windows recording.", "A declared stride ratio is a pack calibration claim, not proof of correct gait. Missing or static walk artwork is never marked calibrated. Legacy movement without stride metadata is uncalibrated.", "Source frames, effective anchors, animation cursors, exact positions and integer drawn positions are recorded for every sample. Ground ticks are 20px apart.", "Root movement continues while sprite poses are held, which can cause within-hold sawtooth foot drift. max_root_travel_per_sprite_hold and root_pixels_per_sample expose that sampling effect separately; perfect foot planting is not asserted.", "Gait-only CLI defaults to 20fps, matching the application's normal 50ms timer. An explicit --fps overrides the sampling rate without changing movement speed.", "Right and left scenes restart their entry phase from opposite lane ends. Scene end frames are exclusive; end_x_at_scene_boundary includes the unsampled final frame interval."}
+		meta.Notes = []string{"All artwork is read from the supplied private pack; baseline and tick marks are diagnostic UI guides only.", "Cats translate using the application stride calculation, without speed adjustment, clipping, clamping, or wrapping. Trial runs are diagnostic only: eligible_for_autonomous_motion reports the stricter runtime scheduling gate. This is a deterministic gait review, not a native Windows recording.", "A declared stride ratio is a pack calibration claim, not proof of correct gait. Missing or static walk artwork is never marked calibrated. Legacy movement without stride metadata is uncalibrated.", "Source frames, effective anchors, animation cursors, exact positions and integer drawn positions are recorded for every sample. Ground ticks are 20px apart.", "Root movement continues while sprite poses are held, which can cause within-hold sawtooth foot drift. max_root_travel_per_sprite_hold and root_pixels_per_sample expose that sampling effect separately; perfect foot planting is not asserted.", "Gait-only CLI defaults to 20fps, matching the application's normal 50ms timer. An explicit --fps overrides the sampling rate without changing movement speed.", "Right and left scenes restart their entry phase from opposite lane ends. Scene end frames are exclusive; end_x_at_scene_boundary includes the unsampled final frame interval."}
 	}
 	meta.Scenes = previewSchedule(opts, cats)
 	if opts.GaitOnly {
@@ -558,7 +588,7 @@ func renderMotionPreview(opts previewOptions) (*previewMetadata, error) {
 				if opts.GaitOnly {
 					gait := scene.Gait[column]
 					direction := 1.0
-					if scene.Action == "walk_left" {
+					if strings.HasSuffix(scene.Action, "_left") {
 						direction = -1
 					}
 					x := gait.StartX + direction*gait.PixelsPerSecond*positions.SceneSeconds

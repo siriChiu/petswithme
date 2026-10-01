@@ -244,6 +244,26 @@ func lifecycleDrive(ctx context.Context) (err error) {
 	if err = lifecycleWait(ctx, "quiet mode disabled", func() bool { return settingsAre(false, 144) }); err != nil {
 		return err
 	}
+	activityIs := func(want ActivityLevel) bool {
+		data, err := os.ReadFile(settingsPath)
+		if err != nil {
+			return false
+		}
+		var settings Settings
+		return json.Unmarshal(data, &settings) == nil && settings.Activity == want && settings.Quiet == (want == ActivityQuiet)
+	}
+	if err = postCommand(107); err != nil {
+		return err
+	}
+	if err = lifecycleWait(ctx, "lively activity saved", func() bool { return activityIs(ActivityLively) }); err != nil {
+		return err
+	}
+	if err = postCommand(106); err != nil {
+		return err
+	}
+	if err = lifecycleWait(ctx, "normal activity saved", func() bool { return activityIs(ActivityNormal) }); err != nil {
+		return err
+	}
 	if err = postCommand(105); err != nil {
 		return err
 	} // Play all three.
@@ -289,7 +309,7 @@ func TestWindowsAppLifecycleHelper(t *testing.T) {
 	if !app.Quitting || len(app.Pets) != 3 || app.Engine == nil {
 		t.Fatalf("incomplete application lifecycle: quitting=%v pets=%d engine=%v", app.Quitting, len(app.Pets), app.Engine != nil)
 	}
-	if app.Hidden || app.Settings.Quiet || app.Settings.Size != 96 {
+	if app.Hidden || app.Settings.Quiet || app.Settings.Activity != ActivityNormal || app.Settings.Size != 96 {
 		t.Fatalf("commands did not leave expected state: hidden=%v settings=%+v", app.Hidden, app.Settings)
 	}
 	if expected := filepath.Join(os.Getenv("APPDATA"), "ThreeCatCompanion", "settings.json"); app.SettingsPath != expected {
@@ -309,5 +329,5 @@ func TestWindowsAppLifecycleHelper(t *testing.T) {
 	if exists, _, _ := smokeIsWindow.Call(app.Controller); exists != 0 {
 		t.Fatal("controller survived main return")
 	}
-	t.Log("REAL_APP_LIFECYCLE_PASSED: real main, tray setup, three synthetic pets, quiet/hide/show/reset/play/size/quit, isolated settings, window and DIB cleanup")
+	t.Log("REAL_APP_LIFECYCLE_PASSED: real main, tray setup, three synthetic pets, quiet/normal/lively/hide/show/reset/play/size/quit, isolated settings, window and DIB cleanup")
 }

@@ -54,7 +54,7 @@ func TestConfigValidation(t *testing.T) {
 }
 func TestSettingsRoundTrip(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "sub", "settings.json")
-	for _, v := range []Settings{{true, 192}, {false, 96}, {true, 777}} {
+	for _, v := range []Settings{{Quiet: true, Size: 192}, {Quiet: false, Size: 96}, {Quiet: true, Size: 777}} {
 		if e := SaveSettings(p, v); e != nil {
 			t.Fatal(e)
 		}

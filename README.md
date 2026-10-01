@@ -1,8 +1,9 @@
 # Pets With Me / 三貓桌面陪伴
 
 A new, offline Windows desktop companion. Three independent cats live above the
-desktop, watch the pointer, respond to petting, wander, and coordinate short
-approach → greet → follow → rest interactions.
+desktop, watch the pointer, respond to petting, choose random reachable destinations,
+and coordinate short approach, follow/chase, and rest interactions when their
+artwork supports those actions.
 
 This is an early prototype. The public repository contains **code and synthetic
 QA fixtures only**. No reference photos, private cat artwork, or artwork-bearing
@@ -20,9 +21,10 @@ account, API key or network connection is required at runtime.
 - Double-click: short play / jump sequence
 - Hold and drag: move; interrupts autonomous behavior
 - Right-click a cat or its notification-area icon: menu
-- Quiet mode: stops wandering and social activity; direct interactions still work
+- Activity: quiet / normal / lively; livelier cats decide and explore more often
+- Quiet mode: stops autonomous activity; direct interactions still work
 - Hide/show, reset to pointer's monitor, three sizes, play-all, and quit are in the menu
-- Three minutes of system inactivity: settle into a demo sleeping pose
+- Three minutes of system inactivity: settle into an available sleep/sit/rest pose, otherwise idle
 
 The build is unsigned. Windows may show SmartScreen or antivirus warnings. Do
 not disable security software. Code signing and a full recipient-machine check
@@ -34,7 +36,7 @@ unverified behavior.
 The program only samples cursor position, the primary mouse-button state while
 dragging, and aggregate system idle duration. It does not capture screens,
 read window titles/documents, record keystrokes, make network requests, install
-services, modify startup settings, or download updates. Small size/quiet settings
+services, modify startup settings, or download updates. Small size/activity settings
 are saved under `%APPDATA%/ThreeCatCompanion/settings.json`. Delete that folder to
 reset preferences. Hidden mode stops the animation timer entirely.
 
@@ -65,6 +67,7 @@ embedded demo. A relative `sprite` path loads a PNG inside the app folder; optio
 - `core.go`: bounded image/config loading, geometry and premultiplied BGRA conversion
 - `asset_validation.go`: frame-pixel validation, pack path boundaries and stable initial anchors
 - `behavior.go`: independent animation players, action arbitration and social coordinator
+- `autonomy.go` / `activity.go`: weighted choices, destination/dwell planning, artwork gates and activity preferences
 - `main_windows.go`: Win32 per-pixel-alpha layered windows, tray and pointer events
 - `main_preview.go`: optional headless rendering with the same animation player
 - Tests: deterministic behavior simulations, format/fallback validation, ABI checks,
@@ -78,6 +81,20 @@ Each cat owns its behavior state and animation cursor. Immutable decoded images
 can be shared; rendered frame cache is bounded at 32 MiB. Dragging, petting, and
 explicit play cancel conflicting social reservations. Quiet mode keeps direct
 controls available. A single clock drives all animation and movement.
+
+Normal and lively settings alter decision frequency, never silently speed up a
+walk animation. Running requires distinct run artwork and explicitly verified
+stride metadata. Sit/get-up, stretch, groom and pounce choices stay disabled when
+the pack lacks directly authored frames. A fallback is not another finished
+action. Pair greetings are skipped if unavailable; joint rest uses only an
+authored resting pose, or idle. The app does not claim that these code paths
+mean the private art is complete.
+
+Optional per-cat `temperament` values (energy, sociability, curiosity; 0–1)
+control local play preferences. Defaults differ between slots; these are not
+inferred personality claims about real pets. Roaming uses reachable horizontal
+destinations, pauses, cooldowns and repeat avoidance. Pointer attention is brief
+so a nearby cursor does not permanently freeze roaming.
 
 ## Artwork contract
 
@@ -118,3 +135,8 @@ rounded root positions, source frame indices, declared stride calibration, and
 within-pose hold travel. Missing/static walk aliases stay still; anatomical gait
 and likeness still need visual review. Do not calibrate a bad source loop merely
 to make format tests green.
+
+To inspect a separate run candidate, use `--gait-only --gait-actions run_right,run_left`.
+Unverified runs show explicitly labeled trial translation for sole-contact
+measurement; they are not enabled for autonomous movement in the app. The
+metadata reports that distinction.
