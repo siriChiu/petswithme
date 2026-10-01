@@ -352,3 +352,27 @@ func (a *Atlas) FrameRectBGRA(r FrameRect, anchor AnimationAnchor, w, h int) []b
 	}
 	return out
 }
+
+func ManifestCanvas(m *AnimationManifest, a *Atlas) (int, int) {
+	w, h := 0, 0
+	for _, action := range m.Actions {
+		clips := []AnimationClip{action.AnimationClip}
+		for _, clip := range action.Moods {
+			clips = append(clips, clip)
+		}
+		for _, clip := range clips {
+			for _, seq := range [][]AnimationFrame{clip.Start, clip.Loop, clip.End} {
+				for _, f := range seq {
+					if f.Rect != nil {
+						w = max(w, f.Rect.W)
+						h = max(h, f.Rect.H)
+					} else {
+						w = max(w, a.CellW)
+						h = max(h, a.CellH)
+					}
+				}
+			}
+		}
+	}
+	return max(1, w), max(1, h)
+}

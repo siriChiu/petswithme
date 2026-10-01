@@ -162,3 +162,30 @@ func TestDefaultConfigJSON(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestFrameRectKeepsAspectAndAnchor(t *testing.T) {
+	im := image.NewNRGBA(image.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			im.SetNRGBA(x, y, color.NRGBA{R: 255, A: 255})
+		}
+	}
+	a := &Atlas{im, 4, 4}
+	p := a.FrameRectBGRA(FrameRect{0, 0, 4, 4}, AnimationAnchor{.5, 1}, 8, 12)
+	for y := 0; y < 12; y++ {
+		for x := 0; x < 8; x++ {
+			alpha := p[(y*8+x)*4+3]
+			if (y < 4 && alpha != 0) || (y >= 4 && alpha != 255) {
+				t.Fatalf("anchor geometry at %d,%d = %d", x, y, alpha)
+			}
+		}
+	}
+}
+func TestManifestCanvasMixedFrames(t *testing.T) {
+	frames := []AnimationFrame{{Row: 0, Col: 0}, {Rect: &FrameRect{X: 0, Y: 0, W: 40, H: 300}}}
+	m := &AnimationManifest{Actions: map[string]AnimationAction{"idle": {AnimationClip: AnimationClip{Loop: frames}}}}
+	w, h := ManifestCanvas(m, &Atlas{CellW: 192, CellH: 208})
+	if w != 192 || h != 300 {
+		t.Fatal(w, h)
+	}
+}

@@ -13,6 +13,10 @@
 
 ## Native Windows CI
 
+Observed pass on 2026-10-01: [run 36811633388](https://github.com/siriChiu/petswithme/actions/runs/36811633388), Windows Server 2025. Both native lifecycle and per-pixel alpha-hit tests executed and passed, not skipped. The private-art test was intentionally skipped in the public repo; it passes locally with the private demo atlas.
+
+The subsequent full-app subprocess test runs real main, config/PNG loading, tray setup, three pets, quiet/hide/show/reset/play/size/quit and cleanup, with isolated preferences and synthetic art. It reports an explicit skip only if the runner lacks an interactive tray desktop.
+
 The workflow runs tests on windows-latest using synthetic in-memory QA pixels,
 not private cat art. It exercises layered window creation/update, styles,
 nonactivation, show/hide, window bounds and native resource cleanup. A separate

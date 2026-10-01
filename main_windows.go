@@ -217,9 +217,6 @@ func (d *DIB) Resize(w, h int) error {
 	*d = DIB{dc, bmp, old, bits, w, h}
 	return nil
 }
-func render(p *PetWindow, row, col int) error {
-	return renderFrame(p, BehaviorFrame{AnimationFrame: AnimationFrame{Row: row, Col: col}, Anchor: AnimationAnchor{X: .5, Y: 1}})
-}
 func renderFrame(p *PetWindow, frame BehaviorFrame) error {
 	c := p.Cat
 	x, y := int(math.Round(c.X)), int(math.Round(c.Y))
@@ -316,7 +313,12 @@ func reset() {
 	}
 	app.Hidden = false
 	for _, w := range app.Pets {
-		_ = render(w, 0, 0)
+		initial := NewAnimationPlayer(w.Manifest).Frame()
+		if e := renderFrame(w, BehaviorFrame{AnimationFrame: initial, Anchor: w.Manifest.Anchor}); e != nil {
+			quit()
+			showError(e.Error())
+			return
+		}
 		showWindow.Call(w.HWND, 4)
 	}
 	setInterval()
@@ -446,7 +448,7 @@ func command(id int) {
 		save()
 		tick()
 	case 103:
-		messageBox.Call(app.Controller, uintptr(unsafe.Pointer(utf("三貓桌面陪伴 "+appVersion+"\n\n點一下：摸摸／揮手回應\n點兩下：玩一下\n按住拖曳：移動貓咪\n右鍵貓咪或右下角圖示：選單\n系統閒置約 3 分鐘：打盹\n安靜模式：停止散步，仍可摸摸和拖曳\n\n此包使用同一隻示範貓的三個測試位置。\n尚未替換成你們的三隻貓。\n\n完全離線，不擷取畫面、文字或按鍵。\n只讀滑鼠位置、拖曳時的滑鼠按鈕與系統閒置秒數。\n沒有自動開機啟動、廣告或更新下載。\n\n本版由 Linux 交叉編譯，尚未完成 Windows 實機驗證。"))), uintptr(unsafe.Pointer(utf(appTitle))), 0x40)
+		messageBox.Call(app.Controller, uintptr(unsafe.Pointer(utf("三貓桌面陪伴 "+appVersion+"\n\n點一下：摸摸／揮手回應\n點兩下：玩一下\n按住拖曳：移動貓咪\n右鍵貓咪或右下角圖示：選單\n系統閒置約 3 分鐘：打盹\n安靜模式：停止散步，仍可摸摸和拖曳\n\n此包使用同一隻示範貓的三個測試位置。\n尚未替換成你們的三隻貓。\n\n完全離線，不擷取畫面、文字或按鍵。\n只讀滑鼠位置、拖曳時的滑鼠按鈕與系統閒置秒數。\n沒有自動開機啟動、廣告或更新下載。\n\n已通過 Windows 原生透明視窗與基本生命週期測試；多螢幕操作與最終素材仍待實機驗證。"))), uintptr(unsafe.Pointer(utf(appTitle))), 0x40)
 	case 104:
 		quit()
 	}
@@ -474,6 +476,9 @@ func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	}
 	if hwnd == app.Controller {
 		switch msg {
+		case 0x0111:
+			command(int(wp & 0xffff))
+			return 0
 		case 0x0113:
 			tick()
 			return 0
@@ -747,26 +752,7 @@ func main() {
 				showError("動作設定錯誤：" + e.Error())
 				return
 			}
-			cw, ch := 0, 0
-			for _, a := range manifest.Actions {
-				clips := []AnimationClip{a.AnimationClip}
-				for _, clip := range a.Moods {
-					clips = append(clips, clip)
-				}
-				for _, clip := range clips {
-					for _, seq := range [][]AnimationFrame{clip.Start, clip.Loop, clip.End} {
-						for _, f := range seq {
-							if f.Rect != nil {
-								cw = max(cw, f.Rect.W)
-								ch = max(ch, f.Rect.H)
-							}
-						}
-					}
-				}
-			}
-			if cw > 0 && ch > 0 {
-				canvasW, canvasH = cw, ch
-			}
+			canvasW, canvasH = ManifestCanvas(manifest, atlas)
 		}
 		w := app.Settings.Size
 		h := w * canvasH / canvasW
