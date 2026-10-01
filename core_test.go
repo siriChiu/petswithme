@@ -209,3 +209,18 @@ func TestGroundAnchorReachesWindowFloorWithoutPaddingFloat(t *testing.T) {
 		t.Fatal("drag did not preserve airborne canvas")
 	}
 }
+
+func TestPackDefaultSizePreservesSavedChoice(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	s := loadSettingsAtSize(p, 192, true)
+	if s.Size != 192 || !s.ExperimentalMovement {
+		t.Fatal("private first-run defaults lost")
+	}
+	s.Size = 96
+	if err := SaveSettings(p, s); err != nil {
+		t.Fatal(err)
+	}
+	if loadSettingsAtSize(p, 192, true).Size != 96 {
+		t.Fatal("saved size overwritten")
+	}
+}

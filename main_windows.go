@@ -740,7 +740,7 @@ func main() {
 		confDir = app.Folder
 	}
 	app.SettingsPath = filepath.Join(confDir, "ThreeCatCompanion", "settings.json")
-	app.Settings = LoadSettings(app.SettingsPath, cfg.ExperimentalMovement)
+	app.Settings = loadSettingsAtSize(app.SettingsPath, cfg.DefaultSize, cfg.ExperimentalMovement)
 	cursor, _, _ := loadCursor.Call(0, 32512)
 	app.Icon, _, _ = loadIcon.Call(0, 32512)
 	proc := syscall.NewCallback(windowProc)

@@ -59,6 +59,7 @@ type Config struct {
 	Version              int       `json:"version"`
 	Cats                 []CatSpec `json:"cats"`
 	ExperimentalMovement bool      `json:"experimentalMovement,omitempty"`
+	DefaultSize          int       `json:"defaultSize,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -149,7 +150,10 @@ func SaveSettings(path string, s Settings) error {
 	return os.Rename(tmp, path)
 }
 func LoadSettings(path string, experimentalDefault ...bool) Settings {
-	s := Settings{Size: 144, CPU: DefaultCPUSettings(), ExperimentalMovement: len(experimentalDefault) > 0 && experimentalDefault[0]}
+	return loadSettingsAtSize(path, 144, experimentalDefault...)
+}
+func loadSettingsAtSize(path string, size int, experimentalDefault ...bool) Settings {
+	s := Settings{Size: ValidSize(size), CPU: DefaultCPUSettings(), ExperimentalMovement: len(experimentalDefault) > 0 && experimentalDefault[0]}
 	if b, e := readBoundedFile(path, 4096); e == nil {
 		_ = json.Unmarshal(b, &s)
 	}
