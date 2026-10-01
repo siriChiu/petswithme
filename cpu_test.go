@@ -431,3 +431,41 @@ func TestCPUUnavailableStretchAliasDoesNotDisableRealKnead(t *testing.T) {
 		t.Fatal("missing stretch contaminated real knead capability")
 	}
 }
+
+func TestCPUDenseStretchShowsAll13PosesAtBusyCadence(t *testing.T) {
+	m := cpuFixture()
+	frame := func(i, ms int) AnimationFrame {
+		return AnimationFrame{Rect: &FrameRect{100 + i*32, 0, 32, 32}, DurationMS: ms}
+	}
+	clip := AnimationClip{}
+	for i := 0; i < 6; i++ {
+		clip.Start = append(clip.Start, frame(i, 100))
+	}
+	clip.Loop = []AnimationFrame{frame(6, 700)}
+	for i := 7; i < 13; i++ {
+		ms := 108
+		if i == 12 {
+			ms = 110
+		}
+		clip.End = append(clip.End, frame(i, ms))
+	}
+	m.Actions["stretch"] = AnimationAction{AnimationClip: clip}
+	e := NewBehaviorEngine(behaviorCats(1), m)
+	e.States[0].BusyElapsed = 299.9
+	e.States[0].BusyNextStretch = 300
+	e.Load.Active = true
+	seen := map[int]bool{}
+	returned := -1.0
+	for step := 0; step < 25; step++ {
+		now := float64(step) / 10
+		f := e.Tick(now, .1, 0, 0, 0, false)[0]
+		if f.Action == "stretch" {
+			seen[(f.Rect.X-100)/32] = true
+		} else if len(seen) > 0 && returned < 0 {
+			returned = now
+		}
+	}
+	if len(seen) != 13 || returned < 1.95 || returned > 2.05 {
+		t.Fatalf("dense timing/poses wrong: seen%v return%g", seen, returned)
+	}
+}

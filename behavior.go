@@ -411,6 +411,8 @@ type BehaviorFrame struct {
 	Generation uint64
 }
 type CatBehavior struct {
+	LastPresentedGeneration                            uint64
+	LastPresentedPhase                                 AnimationPhase
 	Action, Mood                                       string
 	Priority                                           BehaviorPriority
 	Until, NextDecision                                float64
@@ -561,6 +563,11 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 			continue
 		}
 		s := e.States[i]
+		// Advance only the action that was actually visible during the elapsed
+		// interval. A newly requested action or exit must show its first pose.
+		if s.Player.Generation == s.LastPresentedGeneration && !(s.Player.Phase == AnimationEnd && s.LastPresentedPhase != AnimationEnd) {
+			s.Player.Tick(dt)
+		}
 		busy[i] = e.cpuEligible(i, quiet)
 		if e.Load == nil || !e.Load.Active {
 			s.BusyElapsed = 0
@@ -699,7 +706,9 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		if !s.Ending && !finishingSocial {
 			s.Player.Set(action, s.Mood)
 		}
-		frame, _ := s.Player.Tick(dt)
+		frame := s.Player.Frame()
+		s.LastPresentedGeneration = s.Player.Generation
+		s.LastPresentedPhase = s.Player.Phase
 		anchor := s.Player.Manifest.Anchor
 		if frame.Anchor != nil {
 			anchor = *frame.Anchor

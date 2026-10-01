@@ -538,6 +538,7 @@ func TestSocialGreetingFinishesBothRecoverySequences(t *testing.T) {
 	e.Social.NextAttempt = 1000
 	seen := [2]map[int]bool{{}, {}}
 	done := [2]bool{}
+	lastEndStarted := [2]float64{-1, -1}
 	followed := false
 	for n := 0; n < 100; n++ {
 		f := quietCursor(e, float64(n)*.05, .05, false)
@@ -545,13 +546,16 @@ func TestSocialGreetingFinishesBothRecoverySequences(t *testing.T) {
 			if f[i].Action == "greet" && s.Player.Phase == AnimationEnd {
 				seen[i][s.Player.Index] = true
 			}
-			if f[i].Action == "greet" && s.Player.Phase == AnimationDone {
+			if f[i].Action == "greet" && s.Player.Phase == AnimationEnd && s.Player.Index == 1 {
 				done[i] = true
+				if lastEndStarted[i] < 0 {
+					lastEndStarted[i] = float64(n) * .05
+				}
 			}
 		}
 		for _, p := range e.Social.Plans {
 			if p.Phase == "follow" || p.Phase == "chase" {
-				if !done[0] || !done[1] {
+				if !done[0] || !done[1] || float64(n)*.05-lastEndStarted[0] < .1-1e-8 || float64(n)*.05-lastEndStarted[1] < .3-1e-8 {
 					t.Fatal("departed before both greetings recovered")
 				}
 				followed = true
@@ -583,5 +587,25 @@ func TestSocialGreetingRecoveryCanBeInterruptedByDrag(t *testing.T) {
 	f := quietCursor(e, 2.7, .05, false)
 	if f[0].Action != "drag" || f[1].Action != "idle" || len(e.Social.Reservations) != 0 {
 		t.Fatalf("recovery resisted drag: %v", f)
+	}
+}
+
+func TestBehaviorNewActionAndExitShowFirstPose(t *testing.T) {
+	m := DefaultAnimationManifest()
+	m.Actions["pet"] = AnimationAction{AnimationClip: AnimationClip{Start: []AnimationFrame{{Row: 3, Col: 0, DurationMS: 50}}, Loop: []AnimationFrame{{Row: 3, Col: 1, DurationMS: 50}}, End: []AnimationFrame{{Row: 3, Col: 2, DurationMS: 50}}}}
+	e := NewBehaviorEngine(behaviorCats(1), m)
+	e.Pet(0, 0)
+	if f := quietCursor(e, .05, .05, false)[0]; f.Row != 3 || f.Col != 0 || e.States[0].Player.Phase != AnimationStart {
+		t.Fatalf("new action first pose skipped:%+v", f)
+	}
+	if f := quietCursor(e, .1, .05, false)[0]; f.Col != 1 {
+		t.Fatal("entry did not advance at its authored time")
+	}
+	e.States[0].Until = .15
+	if f := quietCursor(e, .15, .05, false)[0]; f.Col != 2 || e.States[0].Player.Phase != AnimationEnd {
+		t.Fatal("exit first pose skipped")
+	}
+	if f := quietCursor(e, .2, .05, false)[0]; f.Action != "idle" {
+		t.Fatalf("exit kept unnecessary completion hold:%s", f.Action)
 	}
 }

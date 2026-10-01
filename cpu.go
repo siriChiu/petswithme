@@ -299,13 +299,13 @@ func (e *BehaviorEngine) tickBusy(i int, now, dt float64) string {
 			s.BusyStretchEnding = false
 			s.Ending = false
 		}
+		if s.BusyStretching && !s.BusyStretchEnding {
+			s.BusyStretchRemaining -= dt
+		}
 		if s.BusyStretching && s.BusyStretchRemaining <= 1e-9 && !s.BusyStretchEnding {
 			s.Player.Stop()
 			s.Ending = true
 			s.BusyStretchEnding = true
-		}
-		if s.BusyStretching && !s.BusyStretchEnding {
-			s.BusyStretchRemaining -= dt
 		}
 		if s.BusyStretching && s.BusyStretchEnding && s.Player.Phase == AnimationDone {
 			s.BusyStretching = false
@@ -319,7 +319,7 @@ func (e *BehaviorEngine) tickBusy(i int, now, dt float64) string {
 			s.BusyStretching = true
 			s.BusyStretchEnding = false
 			s.Ending = false
-			s.BusyStretchRemaining = actionCycle(s.Player.Manifest, "stretch", s.Mood) - dt
+			s.BusyStretchRemaining = actionCycle(s.Player.Manifest, "stretch", s.Mood)
 			s.Player.Play("stretch", s.Mood)
 		}
 	}
