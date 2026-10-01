@@ -9,6 +9,15 @@ func GazeOrigin(c *Cat) (float64, float64) {
 	return c.X + float64(c.W)*.5, c.Y + float64(c.H)*.3
 }
 
+// A taller animation canvas need not move the cat's head. Packs may declare
+// that head point independently of the floor anchor and transparent padding.
+func ManifestGazeOrigin(c *Cat, m *AnimationManifest) (float64, float64) {
+	if m != nil && m.GazeOrigin != nil {
+		return c.X + float64(c.W)*m.GazeOrigin.X, c.Y + float64(c.H)*m.GazeOrigin.Y
+	}
+	return GazeOrigin(c)
+}
+
 func hasGazeArtwork(m *AnimationManifest, mood string) bool {
 	for direction := 0; direction < 16; direction++ {
 		if HasAuthoredAction(m, "gaze_"+itoaDirection(direction), mood) {
@@ -20,9 +29,9 @@ func hasGazeArtwork(m *AnimationManifest, mood string) bool {
 
 func (e *BehaviorEngine) pointerGaze(i int, cursorX, cursorY float64) string {
 	s, c := e.States[i], e.Cats[i]
-	ox, oy := GazeOrigin(c)
+	ox, oy := ManifestGazeOrigin(c, s.Player.Manifest)
 	dx, dy := cursorX-ox, cursorY-oy
-	if !finite(cursorX) || !finite(cursorY) || math.Hypot(dx, dy) < math.Max(8, float64(c.W)*.05) {
+	if !finite(cursorX) || !finite(cursorY) || !finite(ox) || !finite(oy) || math.Hypot(dx, dy) < math.Max(8, float64(c.W)*.05) {
 		s.GazeActive = false
 		return "idle"
 	}

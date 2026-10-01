@@ -141,3 +141,12 @@ The load state never changes animation playback speed or calibrated stride. It
 keeps the cat's root stationary, pauses for direct interaction and quiet mode,
 and consumes only one stretch opportunity per configured interval. Missing
 stretch artwork leaves kneading in place.
+
+When padding changes to contain a tall pickup or a wide stretch, keep the art's
+scale and ground reference unchanged. An optional top-level
+`"gazeOrigin":{"x":0.5,"y":0.43}` declares the visible head's normalized point
+within the final window canvas; both values must be finite and in [0,1]. Omitting
+it preserves the original center-x/30%-height behavior. This point is independent
+of the floor anchor. Review the real idle-to-action transition after any canvas
+change, including gaze directions close to the face; do not fit each silhouette
+independently or silently shrink the character to fit a cell.

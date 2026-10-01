@@ -17,17 +17,23 @@ func TestWindowsGazeReadsGlobalCursor(t *testing.T) {
 	if !ok {
 		t.Fatal("GetCursorPos did not return a screen sample")
 	}
-	for d := 0; d < 16; d++ {
-		e := gazeFixture()
-		c := e.Cats[0]
-		a := float64(d) * math.Pi / 8
-		c.X = float64(p.X) - 1000*math.Sin(a) - float64(c.W)*.5
-		c.Y = float64(p.Y) + 1000*math.Cos(a) - float64(c.H)*.3
-		f := e.Tick(0, .05, float64(p.X), float64(p.Y), 0, false)[0]
-		if f.Action != "gaze_"+itoaDirection(d) {
-			t.Fatalf("native screen sample selected %s instead of %d", f.Action, d)
+	for _, origin := range []*AnimationAnchor{nil, {X: .42, Y: .56}} {
+		for d := 0; d < 16; d++ {
+			e := gazeFixture()
+			c := e.Cats[0]
+			e.Manifest.GazeOrigin = origin
+			ox, oy := ManifestGazeOrigin(c, e.Manifest)
+			headX, headY := ox-c.X, oy-c.Y
+			a := float64(d) * math.Pi / 8
+			c.X = float64(p.X) - 1000*math.Sin(a) - headX
+			c.Y = float64(p.Y) + 1000*math.Cos(a) - headY
+			f := e.Tick(0, .05, float64(p.X), float64(p.Y), 0, false)[0]
+			if f.Action != "gaze_"+itoaDirection(d) {
+				t.Fatalf("native screen sample with origin%v selected%s instead of%d", origin, f.Action, d)
+			}
 		}
 	}
+
 }
 
 func TestWindowsGazeSweepRendersWithoutFocus(t *testing.T) {

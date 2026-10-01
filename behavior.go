@@ -18,6 +18,7 @@ type AnimationManifest struct {
 	SchemaVersion int                        `json:"schemaVersion"`
 	Fallback      string                     `json:"fallback"`
 	Anchor        AnimationAnchor            `json:"anchor"`
+	GazeOrigin    *AnimationAnchor           `json:"gazeOrigin,omitempty"`
 	Actions       map[string]AnimationAction `json:"actions"`
 }
 type AnimationAnchor struct {
@@ -87,6 +88,9 @@ func (m *AnimationManifest) Validate(imageWidth, imageHeight int) error {
 	}
 	if !finite(m.Anchor.X) || !finite(m.Anchor.Y) || m.Anchor.X < 0 || m.Anchor.X > 1 || m.Anchor.Y < 0 || m.Anchor.Y > 1 {
 		return errors.New("animation anchor must be normalized between 0 and 1")
+	}
+	if p := m.GazeOrigin; p != nil && (!finite(p.X) || !finite(p.Y) || p.X < 0 || p.X > 1 || p.Y < 0 || p.Y > 1) {
+		return errors.New("gazeOrigin must be normalized between 0 and 1")
 	}
 	if _, ok := m.Actions[m.Fallback]; !ok {
 		return errors.New("animation manifest fallback action is missing")
@@ -609,6 +613,7 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		}
 		s := e.States[i]
 		action := s.Action
+		finishingSocial := false
 		switch {
 		case c.Dragging:
 			action = "drag"
@@ -634,6 +639,14 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 				s.Priority = PrioritySocial
 				s.Until = now + .5
 				action = e.socialAction(i, intent.Action)
+				if intent.Action == "greet_end" {
+					action = "greet"
+					if s.Player.Action != action {
+						s.Player.Play(action, s.Mood)
+					}
+					s.Player.Stop()
+					finishingSocial = true
+				}
 				if intent.Move {
 					direction := intent.TargetX - c.X
 					action = e.movementAction(i, direction, intent.Action == "chase")
@@ -659,7 +672,7 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 			s.GazeActive = false
 		}
 		c.Mode = action
-		if !s.Ending {
+		if !s.Ending && !finishingSocial {
 			s.Player.Set(action, s.Mood)
 		}
 		frame, _ := s.Player.Tick(dt)
@@ -731,15 +744,17 @@ type SocialPlan struct {
 	Chase                            bool
 }
 type SocialCoordinator struct {
-	Plans        map[uint64]*SocialPlan
-	Reservations map[int]uint64
-	Cooldown     map[int]float64
-	NextAttempt  float64
-	generation   uint64
-	Activity     ActivityLevel
-	Eligible     func(int, int) bool
-	Supports     func(int, string) bool
-	Sociability  []float64
+	Plans            map[uint64]*SocialPlan
+	Reservations     map[int]uint64
+	Cooldown         map[int]float64
+	NextAttempt      float64
+	generation       uint64
+	Activity         ActivityLevel
+	Eligible         func(int, int) bool
+	Supports         func(int, string) bool
+	GreetingDuration func(int) float64
+	GreetingEnded    func(int) bool
+	Sociability      []float64
 }
 
 func NewSocialCoordinator() *SocialCoordinator {
@@ -850,6 +865,9 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 			if distance >= gap-2 && distance <= gap+5 {
 				p.Phase = "greet"
 				p.PhaseUntil = now + 2.4
+				if s.GreetingDuration != nil {
+					p.PhaseUntil = now + math.Max(2.4, math.Max(s.GreetingDuration(p.A), s.GreetingDuration(p.B)))
+				}
 				if s.Supports != nil && (!s.Supports(p.A, "greet") || !s.Supports(p.B, "greet")) {
 					s.beginFollowing(p, a, b, now)
 				}
@@ -866,6 +884,14 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 			}
 		case "greet":
 			if now >= p.PhaseUntil {
+				if s.GreetingEnded != nil && (!s.GreetingEnded(p.A) || !s.GreetingEnded(p.B)) {
+					p.Phase = "greet_end"
+				} else {
+					s.beginFollowing(p, a, b, now)
+				}
+			}
+		case "greet_end":
+			if s.GreetingEnded == nil || (s.GreetingEnded(p.A) && s.GreetingEnded(p.B)) {
 				s.beginFollowing(p, a, b, now)
 			}
 		case "follow", "chase":
@@ -880,9 +906,9 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 			}
 		}
 		switch p.Phase {
-		case "greet":
-			intents[p.A] = SocialIntent{Action: "greet"}
-			intents[p.B] = SocialIntent{Action: "greet"}
+		case "greet", "greet_end":
+			intents[p.A] = SocialIntent{Action: p.Phase}
+			intents[p.B] = SocialIntent{Action: p.Phase}
 		case "follow", "chase":
 			if p.Leader == p.B {
 				intents[p.B] = SocialIntent{p.Phase, p.Destination, b.Y, true}

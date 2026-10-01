@@ -334,6 +334,12 @@ func itoaDirection(i int) string {
 }
 
 func (e *BehaviorEngine) configureSocial() {
+	e.Social.GreetingDuration = func(i int) float64 { s := e.States[i]; return actionCycle(s.Player.Manifest, "greet", s.Mood) }
+	e.Social.GreetingEnded = func(i int) bool {
+		p := e.States[i].Player
+		return len(p.Manifest.Resolve("greet", e.States[i].Mood).End) == 0 || (p.Action == "greet" && p.Phase == AnimationDone)
+	}
+
 	e.Social.Activity = e.Activity
 	e.Social.Sociability = make([]float64, len(e.States))
 	for i, s := range e.States {

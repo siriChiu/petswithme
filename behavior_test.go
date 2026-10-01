@@ -46,6 +46,7 @@ func TestBehaviorDefaultManifestUsesExistingFrames(t *testing.T) {
 }
 func TestBehaviorManifestRoundTripAndRect(t *testing.T) {
 	m := animationFixture()
+	m.GazeOrigin = &AnimationAnchor{.4, .45}
 	m.Actions["rect"] = AnimationAction{AnimationClip: AnimationClip{Loop: []AnimationFrame{{Rect: &FrameRect{2, 3, 7, 11}, Anchor: &AnimationAnchor{.3, .9}, DurationMS: 175}}}}
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -56,7 +57,7 @@ func TestBehaviorManifestRoundTripAndRect(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := loaded.Resolve("rect", "calm").Loop[0]
-	if f.Rect.W != 7 || f.DurationMS != 175 || f.Anchor.X != .3 {
+	if f.Rect.W != 7 || f.DurationMS != 175 || f.Anchor.X != .3 || loaded.GazeOrigin == nil || *loaded.GazeOrigin != *m.GazeOrigin {
 		t.Fatalf("lost manifest fields: %+v", f)
 	}
 }
@@ -515,5 +516,72 @@ func TestBehaviorMovementTravelsMeasuredStridePerCycle(t *testing.T) {
 	}
 	if want := 50 + 144*.3; math.Abs(c.X-want) > 1e-7 {
 		t.Fatalf("moved %g; want %g after one cycle", c.X, want)
+	}
+}
+
+func TestSocialGreetingFinishesBothRecoverySequences(t *testing.T) {
+	cats := behaviorCats(2)
+	cats[1].X = cats[0].X + float64(cats[0].W) + socialGap(cats[0], cats[1])
+	e := NewBehaviorEngine(cats, fullCapabilityFixture())
+	e.configureSocial()
+	for i := 0; i < 2; i++ {
+		m := fullCapabilityFixture()
+		a := m.Actions["greet"]
+		a.End = []AnimationFrame{{Row: 0, Col: 4, DurationMS: 100 + i*200}, {Row: 0, Col: 5, DurationMS: 100 + i*200}}
+		m.Actions["greet"] = a
+		e.SetManifest(i, m)
+		e.States[i].NextDecision = 1000
+	}
+	if !e.Social.Start(cats, 0, 1, 0) {
+		t.Fatal("pair unavailable")
+	}
+	e.Social.NextAttempt = 1000
+	seen := [2]map[int]bool{{}, {}}
+	done := [2]bool{}
+	followed := false
+	for n := 0; n < 100; n++ {
+		f := quietCursor(e, float64(n)*.05, .05, false)
+		for i, s := range e.States {
+			if f[i].Action == "greet" && s.Player.Phase == AnimationEnd {
+				seen[i][s.Player.Index] = true
+			}
+			if f[i].Action == "greet" && s.Player.Phase == AnimationDone {
+				done[i] = true
+			}
+		}
+		for _, p := range e.Social.Plans {
+			if p.Phase == "follow" || p.Phase == "chase" {
+				if !done[0] || !done[1] {
+					t.Fatal("departed before both greetings recovered")
+				}
+				followed = true
+			}
+		}
+	}
+	if !followed || !seen[0][0] || !seen[0][1] || !seen[1][0] || !seen[1][1] {
+		t.Fatalf("recovery incomplete: %v followed%v", seen, followed)
+	}
+}
+func TestSocialGreetingRecoveryCanBeInterruptedByDrag(t *testing.T) {
+	cats := behaviorCats(2)
+	cats[1].X = cats[0].X + float64(cats[0].W) + socialGap(cats[0], cats[1])
+	m := fullCapabilityFixture()
+	a := m.Actions["greet"]
+	a.End = []AnimationFrame{{Row: 0, Col: 5, DurationMS: 1000}}
+	m.Actions["greet"] = a
+	e := NewBehaviorEngine(cats, m)
+	e.configureSocial()
+	e.Social.Start(cats, 0, 1, 0)
+	e.Social.NextAttempt = 1000
+	for n := 0; n < 54; n++ {
+		quietCursor(e, float64(n)*.05, .05, false)
+	}
+	if e.States[0].Player.Phase != AnimationEnd {
+		t.Fatal("did not enter greeting recovery")
+	}
+	cats[0].Dragging = true
+	f := quietCursor(e, 2.7, .05, false)
+	if f[0].Action != "drag" || f[1].Action != "idle" || len(e.Social.Reservations) != 0 {
+		t.Fatalf("recovery resisted drag: %v", f)
 	}
 }

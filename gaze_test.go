@@ -96,3 +96,30 @@ func TestGazeRespectsInteractionsSleepAndCPU(t *testing.T) {
 		t.Fatalf("CPU action lost priority: %s", f.Action)
 	}
 }
+
+func TestGazeOriginPreservesHeadWhenCanvasPaddingChanges(t *testing.T) {
+	e := gazeFixture()
+	c := e.Cats[0]
+	c.W, c.H = 192, 173
+	c.X, c.Y = -960, 200
+	m := e.States[0].Player.Manifest
+	m.GazeOrigin = &AnimationAnchor{.48, .43}
+	ox, oy := ManifestGazeOrigin(c, m)
+	for d := 0; d < 16; d++ {
+		a := float64(d) * math.Pi / 8
+		f := e.Tick(float64(d), .05, ox+30*math.Sin(a), oy-30*math.Cos(a), 0, true)[0]
+		if f.Action != "gaze_"+itoaDirection(d) {
+			t.Fatalf("offset head direction%d: %s", d, f.Action)
+		}
+	}
+	// Explicit point survives source JSON; out-of-range/NaN points are rejected.
+	if err := m.Validate(1024, 1408); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []AnimationAnchor{{-.1, .5}, {.5, 1.1}, {math.NaN(), .5}} {
+		m.GazeOrigin = &p
+		if m.Validate(1024, 1408) == nil {
+			t.Fatalf("invalid head point accepted:%v", p)
+		}
+	}
+}
