@@ -385,7 +385,7 @@ type BehaviorFrame struct {
 type CatBehavior struct {
 	Action, Mood                                       string
 	Priority                                           BehaviorPriority
-	Until, NextDecision, GazeUntil                     float64
+	Until, NextDecision                                float64
 	Player                                             *AnimationPlayer
 	WasDragging                                        bool
 	Ending                                             bool
@@ -394,7 +394,8 @@ type CatBehavior struct {
 	HasDestination                                     bool
 	LastChoice                                         string
 	ActionCooldown                                     map[string]float64
-	AttentionUntil, AttentionAfter                     float64
+	GazeDirection                                      int
+	GazeActive                                         bool
 	AfterAction                                        string
 	Autonomous                                         bool
 	BusyElapsed, BusyNextStretch, BusyStretchRemaining float64
@@ -431,6 +432,7 @@ func (e *BehaviorEngine) SetManifest(i int, m *AnimationManifest) bool {
 	}
 	s := e.States[i]
 	s.Player.Manifest = m
+	s.GazeActive = false
 	s.Player.Play(s.Action, s.Mood)
 	s.Ending = false
 	s.HasDestination = false
@@ -445,6 +447,7 @@ func (e *BehaviorEngine) Cancel(i int, now float64) {
 	s := e.States[i]
 	s.Action = "idle"
 	s.Priority = PriorityIdle
+	s.GazeActive = false
 	s.Until = 0
 	s.Ending = false
 	s.NextDecision = now + 8
@@ -463,7 +466,6 @@ func (e *BehaviorEngine) Pet(i int, now float64) {
 		return
 	}
 	e.Cats[i].Pet(now)
-	e.States[i].GazeUntil = now + 4
 	e.States[i].Mood = "happy"
 }
 func (e *BehaviorEngine) Play(i int, now float64) {
@@ -616,6 +618,9 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 			action = e.tickBusy(i, now, dt)
 		case quiet || idleSeconds >= 180:
 			s.Action = e.restingAction(i)
+			if quiet && idleSeconds < 180 && finite(cursorX) && finite(cursorY) && hasGazeArtwork(s.Player.Manifest, s.Mood) {
+				s.Action = "idle"
+			}
 			s.HasDestination = false
 			s.Priority = PriorityIdle
 			s.Until = 0
@@ -645,6 +650,13 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 			} else {
 				action = e.tickAutonomy(i, now, dt, cursorX, cursorY)
 			}
+		}
+		// Gaze is a presentation of idle, not an autonomous action or a new
+		// reservation. It cannot delay roaming or interrupt higher priorities.
+		if action == "idle" && s.Priority == PriorityIdle && !s.Ending && idleSeconds < 180 {
+			action = e.pointerGaze(i, cursorX, cursorY)
+		} else {
+			s.GazeActive = false
 		}
 		c.Mode = action
 		if !s.Ending {

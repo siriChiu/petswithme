@@ -1,0 +1,46 @@
+package main
+
+import "math"
+
+// GazeOrigin is in the same physical, global screen coordinates as GetCursorPos
+// and the pet window. The upper-body origin avoids looking down at a cursor
+// beside the face just because the transparent window extends beneath it.
+func GazeOrigin(c *Cat) (float64, float64) {
+	return c.X + float64(c.W)*.5, c.Y + float64(c.H)*.3
+}
+
+func hasGazeArtwork(m *AnimationManifest, mood string) bool {
+	for direction := 0; direction < 16; direction++ {
+		if HasAuthoredAction(m, "gaze_"+itoaDirection(direction), mood) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *BehaviorEngine) pointerGaze(i int, cursorX, cursorY float64) string {
+	s, c := e.States[i], e.Cats[i]
+	ox, oy := GazeOrigin(c)
+	dx, dy := cursorX-ox, cursorY-oy
+	if !finite(cursorX) || !finite(cursorY) || math.Hypot(dx, dy) < math.Max(8, float64(c.W)*.05) {
+		s.GazeActive = false
+		return "idle"
+	}
+	direction := GazeDirection(dx, dy)
+	// Retain the previous sector for an extra 3.375 degrees at a boundary.
+	// This prevents pixel-scale cursor tremor from flashing between poses.
+	if s.GazeActive {
+		sector := math.Atan2(dx, -dy) * 8 / math.Pi
+		delta := math.Mod(sector-float64(s.GazeDirection)+24, 16) - 8
+		if math.Abs(delta) <= .65 {
+			direction = s.GazeDirection
+		}
+	}
+	action := "gaze_" + itoaDirection(direction)
+	if !HasAuthoredAction(s.Player.Manifest, action, s.Mood) {
+		s.GazeActive = false
+		return "idle"
+	}
+	s.GazeDirection, s.GazeActive = direction, true
+	return action
+}

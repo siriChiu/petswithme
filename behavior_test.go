@@ -20,7 +20,8 @@ func behaviorCats(n int) []*Cat {
 	return cats
 }
 func quietCursor(e *BehaviorEngine, now, dt float64, quiet bool) []BehaviorFrame {
-	return e.Tick(now, dt, -10000, -10000, 0, quiet)
+	// NaN explicitly means no pointer sample; far-away coordinates are real gaze targets.
+	return e.Tick(now, dt, math.NaN(), math.NaN(), 0, quiet)
 }
 
 func TestBehaviorDefaultManifestUsesExistingFrames(t *testing.T) {
@@ -411,13 +412,13 @@ func TestBehaviorWakePlaysSleepEnd(t *testing.T) {
 	m.Actions["sleep"] = sleep
 	c := NewCat(0, 100, 108, Rect{0, 0, 1000, 800})
 	e := NewBehaviorEngine([]*Cat{c}, m)
-	e.Tick(0, .1, 9000, 9000, 0, true)
-	f := e.Tick(.1, .1, 9000, 9000, 0, false)[0]
+	e.Tick(0, .1, math.NaN(), math.NaN(), 200, true)
+	f := e.Tick(.1, .1, math.NaN(), math.NaN(), 0, false)[0]
 	if f.Action != "sleep" || e.States[0].Player.Phase != AnimationEnd {
 		t.Fatalf("wake skipped end phase: %+v", f)
 	}
-	e.Tick(.2, .1, 9000, 9000, 0, false)
-	f = e.Tick(.3, .1, 9000, 9000, 0, false)[0]
+	e.Tick(.2, .1, math.NaN(), math.NaN(), 0, false)
+	f = e.Tick(.3, .1, math.NaN(), math.NaN(), 0, false)[0]
 	if f.Action != "idle" {
 		t.Fatalf("wake did not return idle: %s", f.Action)
 	}
@@ -466,7 +467,7 @@ func TestBehaviorBlockedWanderStopsFeet(t *testing.T) {
 	s.Action = "walk_right"
 	s.Priority = PriorityWander
 	s.Until = 10
-	f := e.Tick(1, .1, 9000, 9000, 0, false)[0]
+	f := e.Tick(1, .1, math.NaN(), math.NaN(), 0, false)[0]
 	if f.Action != "idle" || s.Priority != PriorityIdle {
 		t.Fatalf("kept walking against wall: %s", f.Action)
 	}

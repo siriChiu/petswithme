@@ -93,8 +93,11 @@ mean the private art is complete.
 Optional per-cat `temperament` values (energy, sociability, curiosity; 0–1)
 control local play preferences. Defaults differ between slots; these are not
 inferred personality claims about real pets. Roaming uses reachable horizontal
-destinations, pauses, cooldowns and repeat avoidance. Pointer attention is brief
-so a nearby cursor does not permanently freeze roaming.
+destinations, pauses, cooldowns and repeat avoidance. When idle, authored gaze poses continuously follow the global mouse direction,
+including quiet mode. This presentation never postpones a roaming decision.
+Directional art must be supplied; neighboring gaze aliases are explicit.
+A small face-centered dead zone and angular hysteresis prevent boundary flicker.
+Petting, dragging, movement, CPU actions, and inactivity sleep take priority.
 
 ## Artwork contract
 

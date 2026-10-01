@@ -23,6 +23,10 @@ limit. Configuration paths must be local, relative paths; maximum three cats.
 | 10 | gaze down clockwise to up-left | 8 |
 
 The sixteen gaze indices are viewer coordinates: 0 up, 4 right, 8 down, 12 left.
+Idle tracking uses the global screen pointer relative to the upper-body point
+(window center x, 30% height y), with no proximity timeout. Quiet mode can still
+look around without moving. Missing gaze art stays idle; aliases to neighboring
+authored gaze directions are allowed but are not sixteen distinct drawings.
 The demo sleeping action holds an existing closed-eye idle frame. Groom/stretch
 and social actions use explicitly marked fallback art until dedicated art exists.
 

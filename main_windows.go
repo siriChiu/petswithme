@@ -168,7 +168,12 @@ func signed(v int) uintptr { return uintptr(v) }
 func showError(s string) {
 	messageBox.Call(0, uintptr(unsafe.Pointer(utf(s))), uintptr(unsafe.Pointer(utf(appTitle))), 0x10)
 }
-func currentCursor() Point { var p Point; getCursorPos.Call(uintptr(unsafe.Pointer(&p))); return p }
+func readCurrentCursor() (Point, bool) {
+	var p Point
+	ok, _, _ := getCursorPos.Call(uintptr(unsafe.Pointer(&p)))
+	return p, ok != 0
+}
+func currentCursor() Point { p, _ := readCurrentCursor(); return p }
 func workArea(hwnd uintptr, p Point) Rect {
 	var m uintptr
 	if hwnd != 0 {
@@ -344,7 +349,7 @@ func tick() {
 	now := nowSeconds()
 	dt := math.Min(.2, now-app.LastTime)
 	app.LastTime = now
-	p := currentCursor()
+	p, cursorValid := readCurrentCursor()
 	if now-app.LastIdleCheck >= 1 {
 		li := LastInput{Size: 8}
 		if v, _, _ := getLastInput.Call(uintptr(unsafe.Pointer(&li))); v != 0 {
@@ -362,7 +367,7 @@ func tick() {
 			down, _, _ := getMouseButtonState.Call(button)
 			if down&0x8000 == 0 {
 				finishDrag(w)
-			} else {
+			} else if cursorValid {
 				dragMove(w, p)
 			}
 		}
@@ -371,7 +376,11 @@ func tick() {
 		return
 	}
 	pollCPU(now)
-	frames := app.Engine.Tick(now, dt, float64(p.X), float64(p.Y), app.Idle, app.Settings.Quiet)
+	cursorX, cursorY := float64(p.X), float64(p.Y)
+	if !cursorValid {
+		cursorX, cursorY = math.NaN(), math.NaN()
+	}
+	frames := app.Engine.Tick(now, dt, cursorX, cursorY, app.Idle, app.Settings.Quiet)
 	for i, w := range app.Pets {
 		if e := renderFrame(w, frames[i]); e != nil {
 			quit()

@@ -324,19 +324,6 @@ func (e *BehaviorEngine) tickAutonomy(i int, now, dt, cursorX, cursorY float64) 
 	if s.Priority == PriorityIdle && s.Until == 0 && now >= s.NextDecision {
 		e.decideAutonomy(i, now)
 	}
-	// Pointer attention is bounded. It cannot permanently immobilize roaming cats.
-	dx, dy := cursorX-(c.X+float64(c.W)/2), cursorY-(c.Y+float64(c.H)/2)
-	near := dx*dx+dy*dy < 260*260 && math.Abs(dx)+math.Abs(dy) > 15
-	gaze := "gaze_" + itoaDirection(GazeDirection(dx, dy))
-	if s.Priority == PriorityIdle && s.Until == 0 && near && HasAuthoredAction(s.Player.Manifest, gaze, s.Mood) {
-		if now >= s.AttentionAfter {
-			s.AttentionUntil = now + .6 + c.Seed.Float64()*(.7+s.Temperament.Curiosity)
-			s.AttentionAfter = now + 8 + c.Seed.Float64()*10
-		}
-		if now < s.AttentionUntil || now < s.GazeUntil {
-			return gaze
-		}
-	}
 	return s.Action
 }
 func itoaDirection(i int) string {
