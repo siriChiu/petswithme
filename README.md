@@ -262,6 +262,14 @@ expiring while a delayed timer has not shown them. Cursor tracking uses radial
 and angular hysteresis to avoid idle/gaze flicker near the face. These changes
 reuse existing artwork and do not add generated in-between drawings.
 
+Pet reactions have a two-second visible deadline followed by the authored
+recovery. If the current loop can finish within 350ms of that deadline, it may
+reach its existing settled pose first. Normal bundled reactions therefore take
+about 2.6 seconds including recovery, rather than 2.3 seconds. The decision is
+latched once; late timers do not add catch-up loops. Pressing, dragging, or another
+click still interrupts immediately. This does not remove the artwork's remaining
+recovery-to-idle pose change or alter other actions.
+
 Sparse gaze experiments may opt into nearest-authored-angle selection. An index
 grid of 32 does not require or certify 32 different drawings: partial sets use
 only their real angles with spacing-aware hysteresis. This experiment does not

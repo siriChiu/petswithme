@@ -459,7 +459,72 @@ type CatBehavior struct {
 	Autonomous                                         bool
 	BusyElapsed, BusyNextStretch, BusyStretchRemaining float64
 	BusyStretching, BusyStretchEnding                  bool
+	PetExitPlanned                                     bool
+	PetExitGeneration                                  uint64
+	PetExitNominalUntil                                float64
 }
+
+const petExitGraceSeconds = .35
+
+func (s *CatBehavior) resetPetExit() {
+	if s.PetExitPlanned {
+		s.Until = math.Min(s.Until, s.PetExitNominalUntil)
+	}
+	s.PetExitPlanned = false
+	s.PetExitGeneration = 0
+	s.PetExitNominalUntil = 0
+}
+
+// Pet may finish its current loop when it is already close to a settled pose.
+// Decide once per request; a delayed timer must never start a catch-up cycle or
+// move the hard limit. Other actions and Stop's interruption semantics stay as-is.
+func (s *CatBehavior) finishNearbyPetCycle(now float64, completedLoop bool) {
+	if s.Action != "pet" || s.Player.Action != "pet" || s.Priority != PriorityPet || s.Autonomous || s.OneShot || s.Ending {
+		return
+	}
+	if s.PetExitPlanned {
+		if s.PetExitGeneration != s.Player.Generation {
+			// An unexpected player replacement invalidates the pending wait.
+			s.Until = math.Min(s.Until, s.PetExitNominalUntil)
+		} else if completedLoop {
+			// The duration player already completed the awaited loop. Do not
+			// show its wrapped first pose because of a fractional deadline ulp.
+			s.Until = math.Min(s.Until, now)
+		}
+		return
+	}
+	if now < s.Until {
+		return
+	}
+	s.PetExitPlanned = true
+	s.PetExitGeneration = s.Player.Generation
+	s.PetExitNominalUntil = s.Until
+	if completedLoop || s.Player.Phase != AnimationLoop || len(s.Player.clip.End) == 0 {
+		return
+	}
+	// At a cycle boundary the previous loop is already complete. Do not wait
+	// another complete short loop merely because the cursor has wrapped to zero.
+	if s.Player.Index == 0 && s.Player.ElapsedMS <= 1e-5 {
+		return
+	}
+	target := now + s.Player.currentLoopRemainingMS()/1000
+	hardLimit := s.PetExitNominalUntil + petExitGraceSeconds
+	if target <= hardLimit+1e-8 {
+		s.Until = math.Min(target, hardLimit)
+	}
+}
+
+func (p *AnimationPlayer) currentLoopRemainingMS() float64 {
+	if p.Phase != AnimationLoop || p.Index < 0 || p.Index >= len(p.clip.Loop) {
+		return 0
+	}
+	remaining := math.Max(0, float64(max(10, p.clip.Loop[p.Index].DurationMS))-p.ElapsedMS)
+	for _, f := range p.clip.Loop[p.Index+1:] {
+		remaining += float64(max(10, f.DurationMS))
+	}
+	return remaining
+}
+
 type BehaviorEngine struct {
 	Cats                 []*Cat
 	States               []*CatBehavior
@@ -491,6 +556,7 @@ func (e *BehaviorEngine) SetManifest(i int, m *AnimationManifest) bool {
 	}
 	s := e.States[i]
 	s.Player.Manifest = m
+	s.resetPetExit()
 	s.MotionTurning = false
 	s.OneShot = false
 	s.PendingDuration = 0
@@ -508,6 +574,7 @@ func (e *BehaviorEngine) Cancel(i int, now float64) {
 	}
 	e.Social.Cancel(i, now)
 	s := e.States[i]
+	s.resetPetExit()
 	s.Action = "idle"
 	s.Priority = PriorityIdle
 	s.GazeActive = false
@@ -568,6 +635,7 @@ func (e *BehaviorEngine) Request(i int, action string, priority BehaviorPriority
 		return false
 	}
 	e.Social.Cancel(i, now)
+	s.resetPetExit()
 	s.Action = action
 	s.Priority = priority
 	s.Until = now + duration
@@ -624,7 +692,11 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		// Advance only the action that was actually visible during the elapsed
 		// interval. A newly requested action or exit must show its first pose.
 		s.MotionSeconds = 0
+		completedPetLoop := false
 		if s.Player.Generation == s.LastPresentedGeneration && !(s.Player.Phase == AnimationEnd && s.LastPresentedPhase != AnimationEnd) {
+			if s.Action == "pet" && s.Player.Phase == AnimationLoop {
+				completedPetLoop = dt*1000+1e-5 >= s.Player.currentLoopRemainingMS()
+			}
 			s.MotionSeconds = s.Player.loopSeconds(dt)
 			s.Player.Tick(dt)
 		}
@@ -660,12 +732,16 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 			s.Ending = true
 			s.Player.Stop()
 		}
+		if !c.Dragging && !c.Pressed {
+			s.finishNearbyPetCycle(now, completedPetLoop)
+		}
 		if s.Priority >= PriorityPlay && ((s.OneShot && s.Player.Phase == AnimationDone) || (!s.OneShot && now >= s.Until)) && !c.Dragging {
 			if !s.Ending && !s.OneShot {
 				s.Player.Stop()
 				s.Ending = true
 			}
 			if s.Player.Phase == AnimationDone {
+				s.resetPetExit()
 				s.Priority = PriorityIdle
 				s.OneShot = false
 				s.Action = "idle"

@@ -85,3 +85,51 @@ func TestWindowsClicksWaitForActualDragMovement(t *testing.T) {
 	}
 	t.Log("Native click, double-click, threshold drag, capture cancel, hide and clickthrough preserve gesture state without a pickup flash")
 }
+
+func TestWindowsPressAndDragCancelPetGraceImmediately(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	fixture, err := newSmokeFixture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.close()
+	old := app
+	defer func() { releaseCapture.Call(); killTimer.Call(fixture.probe, 1); app = old }()
+	app.Hidden = false
+	app.Quitting = false
+	app.ClickThrough = false
+	app.Start = time.Now()
+	app.Controller = fixture.probe
+	app.Settings = NormalizeSettings(Settings{Size: 96, CPU: DefaultCPUSettings()})
+	c := NewCat(0, 96, 96, Rect{0, 0, 2000, 1200})
+	c.X, c.Y = float64(fixture.x), float64(fixture.y)
+	m := petExitFixture(true).Manifest
+	app.Engine = NewBehaviorEngine([]*Cat{c}, m)
+	app.Engine.Social.NextAttempt = 1000
+	pet := &PetWindow{HWND: fixture.pet, Cat: c, Manifest: m, Index: 0, CanvasW: 8, CanvasH: 8}
+	app.Pets = []*PetWindow{pet}
+	app.Windows = map[uintptr]*PetWindow{fixture.pet: pet}
+	app.Engine.Pet(0, 0)
+	for ms := 0; ms <= 2050; ms += 50 {
+		petExitTick(app.Engine, float64(ms)/1000, .05)
+	}
+	if !app.Engine.States[0].PetExitPlanned {
+		t.Fatal("fixture did not enter grace")
+	}
+	windowProc(fixture.pet, 0x201, 0, 0)
+	if app.Engine.States[0].PetExitPlanned || app.Engine.States[0].Action != "idle" || !c.Pressed {
+		t.Fatal("native press waited for pet exit")
+	}
+	dragMove(pet, Point{pet.Press.X + 8, pet.Press.Y})
+	f := petExitTick(app.Engine, 2.1, .05)
+	if !c.Dragging || f.Action != "drag" {
+		t.Fatal("native drag waited for pet exit")
+	}
+	windowProc(fixture.pet, 0x1f, 0, 0)
+	f = petExitTick(app.Engine, 2.15, .05)
+	if f.Action == "pet" || app.Engine.States[0].PetExitPlanned {
+		t.Fatal("cancelled grace resumed after capture cancellation")
+	}
+	t.Log("Native press, threshold drag and capture cancellation immediately replace pending Pet exit")
+}

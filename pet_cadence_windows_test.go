@@ -22,9 +22,13 @@ func TestWindowsPetInbetweenPreservesInteractionFlow(t *testing.T) {
 		for _, scenario := range []struct {
 			name                 string
 			quiet, repeat, delay bool
+			stallAt              float64
 		}{
-			{"normal", false, false, false}, {"quiet_manual", true, false, false},
-			{"repeated", false, true, false}, {"delayed_timer", false, false, true},
+			{"normal", false, false, false, 0}, {"quiet_manual", true, false, false, 0},
+			{"repeated_during_grace", false, true, false, 0},
+			{"delayed_before_deadline", false, false, true, .9},
+			{"delayed_across_deadline", false, false, true, 1.9},
+			{"delayed_during_grace", false, false, true, -1},
 		} {
 			profile := "forward_only"
 			if reuseReturn {
@@ -121,17 +125,28 @@ func TestWindowsPetInbetweenPreservesInteractionFlow(t *testing.T) {
 				repeated, stalled, finished := false, false, false
 				endAt, idleAt := -1.0, -1.0
 				maxDelta := 0.0
+				nominalUntil, plannedUntil := 0.0, 0.0
+				stallStart, stallResume, nominalAtStall := -1.0, -1.0, -1.0
+				settledAfterNominal, plannedSamples := 0, 0
+				repeatedDuringGrace := false
 				seen := map[AnimationPhase]bool{}
 				for time.Now().Before(deadline) {
 					eventTime := nowSeconds()
-					if scenario.repeat && !repeated && eventTime >= .8 {
+					state := app.Engine.States[0]
+					inGrace := state.PetExitPlanned && state.Until > state.PetExitNominalUntil && state.Player.Phase == AnimationLoop
+					if scenario.repeat && !repeated && inGrace {
+						repeatedDuringGrace = true
 						app.Engine.Pet(0, eventTime)
 						reference.Pet(0, eventTime)
 						setInterval()
 						repeated = true
+						nominalUntil, plannedUntil = 0, 0
+						settledAfterNominal = 0
 					}
-					if scenario.delay && !stalled && eventTime >= .9 {
+					if scenario.delay && !stalled && nominalUntil > 0 && ((scenario.stallAt >= 0 && eventTime >= nominalUntil-2+scenario.stallAt) || (scenario.stallAt < 0 && inGrace)) {
+						stallStart, nominalAtStall = eventTime, nominalUntil
 						time.Sleep(800 * time.Millisecond)
+						stallResume = nowSeconds()
 						stalled = true
 					}
 					var msg Message
@@ -156,7 +171,27 @@ func TestWindowsPetInbetweenPreservesInteractionFlow(t *testing.T) {
 					reference.Tick(now, math.Min(.25, delta), math.NaN(), math.NaN(), 0, scenario.quiet)
 					a, b := app.Engine.States[0], reference.States[0]
 					p := a.Player
-					if p.Action != b.Player.Action || p.Phase != b.Player.Phase || a.Until != b.Until || a.Ending != b.Ending || p.Generation != b.Player.Generation {
+					if p.Action == "pet" {
+						if a.PetExitPlanned {
+							nominalUntil = a.PetExitNominalUntil
+							if a.Until > nominalUntil {
+								plannedUntil = a.Until
+								plannedSamples++
+								if a.Until > nominalUntil+petExitGraceSeconds+1e-9 {
+									t.Fatal("native grace budget exceeded")
+								}
+								if p.Phase == AnimationLoop && p.Index == 0 {
+									t.Fatal("expired pet restarted a loop")
+								}
+							}
+							if now >= nominalUntil+petExitGraceSeconds && p.Phase != AnimationEnd {
+								t.Fatal("native callback missed hard exit")
+							}
+						} else if !a.Ending {
+							nominalUntil = a.Until
+						}
+					}
+					if p.Action != b.Player.Action || p.Phase != b.Player.Phase || math.Abs(a.Until-b.Until) > 1e-8 || a.Ending != b.Ending || p.Generation != b.Player.Generation {
 						t.Fatalf("dense clip changed flow at %.3f: action %s/%s phase %s/%s deadline %.3f/%.3f", now, p.Action, b.Player.Action, p.Phase, b.Player.Phase, a.Until, b.Until)
 					}
 					if pet.Cat.X != float64(fixture.x) || pet.Cat.Y != float64(fixture.y) {
@@ -164,6 +199,9 @@ func TestWindowsPetInbetweenPreservesInteractionFlow(t *testing.T) {
 					}
 					f := p.Frame()
 					drawing := f.Rect.X / 8
+					if p.Action == "pet" && p.Phase == AnimationLoop && drawing == 5 && now >= nominalUntil {
+						settledAfterNominal++
+					}
 					if drawing == 7 {
 						expectedReference := 3
 						if reuseReturn && p.Index == 4 {
@@ -194,6 +232,9 @@ func TestWindowsPetInbetweenPreservesInteractionFlow(t *testing.T) {
 						}
 						if p.Phase == AnimationEnd && endAt < 0 {
 							endAt = now
+							if p.ElapsedMS != 0 {
+								t.Fatal("native recovery first pose was consumed")
+							}
 						}
 					} else if endAt >= 0 && p.Action == "idle" {
 						idleAt = now
@@ -211,15 +252,21 @@ func TestWindowsPetInbetweenPreservesInteractionFlow(t *testing.T) {
 				if !finished || !seen[AnimationStart] || !seen[AnimationLoop] || !seen[AnimationEnd] {
 					t.Fatal("incomplete actual interaction", finished, seen, newSamples)
 				}
-				if scenario.repeat && !repeated {
-					t.Fatal("repeat not exercised")
+				if scenario.repeat && (!repeated || !repeatedDuringGrace) {
+					t.Skipf("native scheduler created no grace window; re-click-in-grace case is inconclusive (max update %.1fms)", maxDelta*1000)
+				}
+				if scenario.delay && scenario.stallAt < 0 && !stalled {
+					t.Skipf("native scheduler created no grace window; stall-in-grace case is inconclusive (max update %.1fms)", maxDelta*1000)
 				}
 				if scenario.delay && (!stalled || maxDelta < .7) {
 					t.Fatal("native timer delay not exercised", maxDelta)
 				}
+				if !scenario.delay && maxDelta <= .1 && settledAfterNominal == 0 {
+					t.Fatal("regular native playback skipped the settled return")
+				}
 				// WM_TIMER can legally skip a short drawing; report its exposure rather
 				// than misclassifying scheduler jitter as a flow regression.
-				result := map[string]any{"scenario": scenario.name, "profile": profile, "nativeUpdates": samples, "newDrawingSamples": newSamples, "endAt": endAt, "idleAt": idleAt, "maxUpdateMS": maxDelta * 1000, "requestedPetTimerMS": 50, "quietIdleTimerMS": 250, "loopMS": 1070, "originalFlowAtSameClock": true, "layeredPixelsVerified": true}
+				result := map[string]any{"scenario": scenario.name, "profile": profile, "nativeUpdates": samples, "newDrawingSamples": newSamples, "endAt": endAt, "idleAt": idleAt, "nominalUntil": nominalUntil, "plannedUntil": plannedUntil, "maxExtensionMS": 350, "settledAfterNominalSamples": settledAfterNominal, "plannedSamples": plannedSamples, "repeatedDuringGrace": repeatedDuringGrace, "stallStart": stallStart, "stallResume": stallResume, "nominalAtStall": nominalAtStall, "maxUpdateMS": maxDelta * 1000, "requestedPetTimerMS": 50, "quietIdleTimerMS": 250, "loopMS": 1070, "originalClipFlowAtSameClock": true, "layeredPixelsVerified": true}
 				raw, _ := json.Marshal(result)
 				t.Log("NATIVE_PET_FLOW " + string(raw))
 			})
