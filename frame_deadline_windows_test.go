@@ -96,7 +96,7 @@ func measureNativeDeadlines(t *testing.T, adaptive bool, count int) deadlineMeas
 	for i, f := range fixtures {
 		c := NewCat(i, 230, 172, Rect{0, 0, 4000, 2000})
 		c.X = float64(f.x)
-		c.Y = float64(f.y)
+		c.Y = float64(20 + i*190) // Separate moving lanes so collision avoidance does not stop the fixture.
 		cats = append(cats, c)
 		app.Pets = append(app.Pets, &PetWindow{HWND: f.pet, Cat: c, Atlas: atlas, Manifest: m, Index: i, CanvasW: 8, CanvasH: 8})
 	}
@@ -199,7 +199,10 @@ func TestWindowsFrameDeadlineCadenceExperiment(t *testing.T) {
 		adaptive bool
 		cats     int
 	}{{false, 1}, {true, 1}, {true, 1}, {false, 1}, {false, 3}, {true, 3}} {
-		results = append(results, measureNativeDeadlines(t, trial.adaptive, trial.cats))
+		result := measureNativeDeadlines(t, trial.adaptive, trial.cats)
+		b, _ := json.Marshal(result)
+		t.Log("FRAME_DEADLINE_TRIAL=" + string(b))
+		results = append(results, result)
 	}
 	b, _ := json.Marshal(results)
 	t.Log("FRAME_DEADLINE_MEASUREMENTS=" + string(b))
