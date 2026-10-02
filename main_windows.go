@@ -287,8 +287,7 @@ func updateBounds(p *PetWindow) {
 	c := p.Cat
 	c.Bounds = workArea(p.HWND, currentCursor())
 	scale := dpi(p.HWND)
-	w := app.Settings.Size * scale / 96
-	h := w * p.CanvasH / p.CanvasW
+	w, h := ManifestDisplaySize(p.Manifest, p.CanvasW, p.CanvasH, app.Settings.Size, scale)
 	w, h = FitSize(w, h, c.Bounds)
 	if w != c.W || h != c.H {
 		c.W = w
@@ -652,8 +651,7 @@ func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 			if scale < 48 || scale > 768 {
 				scale = 96
 			}
-			w := app.Settings.Size * scale / 96
-			h := w * p.CanvasH / p.CanvasW
+			w, h := ManifestDisplaySize(p.Manifest, p.CanvasW, p.CanvasH, app.Settings.Size, scale)
 			if p.Down {
 				c.Bounds = workArea(0, currentCursor())
 			} else if lp != 0 {
@@ -839,8 +837,7 @@ func main() {
 			}
 			canvasW, canvasH = ManifestCanvas(manifest, atlas)
 		}
-		w := app.Settings.Size
-		h := w * canvasH / canvasW
+		w, h := ManifestDisplaySize(manifest, canvasW, canvasH, app.Settings.Size, 96)
 		w, h = FitSize(w, h, r)
 		c := NewCat(i, w, h, r)
 		// Unit simulations use NewCat's fixed seed; each real launch varies choices.

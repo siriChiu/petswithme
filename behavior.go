@@ -15,6 +15,7 @@ import (
 // Schema 1 supports the legacy atlas and optional pixel rectangles in that image.
 // A fallback is an honest reuse of artwork, not a claim of additional drawings.
 type AnimationManifest struct {
+	ReferenceWidth int                        `json:"referenceWidth,omitempty"`
 	GazeDirections int                        `json:"gazeDirections,omitempty"`
 	SchemaVersion  int                        `json:"schemaVersion"`
 	Fallback       string                     `json:"fallback"`
@@ -95,6 +96,9 @@ func LoadAnimationManifest(r io.Reader, imageWidth, imageHeight int) (*Animation
 func (m *AnimationManifest) Validate(imageWidth, imageHeight int) error {
 	if m == nil || m.SchemaVersion != 1 {
 		return errors.New("animation manifest needs schemaVersion 1")
+	}
+	if m.ReferenceWidth != 0 && (m.ReferenceWidth < 16 || m.ReferenceWidth > 4096) {
+		return errors.New("referenceWidth must be zero, or 16 to 4096 source pixels")
 	}
 	if m.GazeDirections != 0 && m.GazeDirections != 4 && m.GazeDirections != 8 && m.GazeDirections != 16 && m.GazeDirections != 32 {
 		return errors.New("gazeDirections must be 4, 8, 16 or 32")

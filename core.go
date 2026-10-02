@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-const appVersion = "0.5.2-preview"
+const appVersion = "0.5.3-preview"
 
 var rowFrames = [11]int{6, 8, 8, 4, 5, 8, 6, 6, 5, 8, 8}
 
@@ -454,4 +454,20 @@ func ManifestCanvas(m *AnimationManifest, a *Atlas) (int, int) {
 		}
 	}
 	return max(1, w), max(1, h)
+}
+
+// ManifestDisplaySize lets a pack add transparent room for a horizontal tail
+// without making its existing body art smaller at the user's size preference.
+// Old manifests keep exactly the original integer sizing arithmetic.
+func ManifestDisplaySize(m *AnimationManifest, canvasW, canvasH, settingWidth, dpi int) (int, int) {
+	canvasW, canvasH = max(1, canvasW), max(1, canvasH)
+	if dpi < 48 || dpi > 768 {
+		dpi = 96
+	}
+	base := max(1, settingWidth*dpi/96)
+	ref := canvasW
+	if m != nil && m.ReferenceWidth >= 16 && m.ReferenceWidth <= 4096 {
+		ref = m.ReferenceWidth
+	}
+	return max(1, base*canvasW/ref), max(1, base*canvasH/ref)
 }

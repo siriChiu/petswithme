@@ -316,11 +316,11 @@ func loadPreviewCats(root string, width int) ([]previewCat, error) {
 			return nil, fmt.Errorf("cat %d (%q) invalid animation pixels: %w", i+1, spec.Name, err)
 		}
 		cw, ch := ManifestCanvas(manifest, atlas)
-		height := max(1, width*ch/cw)
-		if height > previewCanvasHeight-40 {
-			return nil, fmt.Errorf("cat %d (%q) is %dx%d at --width %d and does not fit the preview; reduce --width", i+1, spec.Name, width, height, width)
+		renderWidth, height := ManifestDisplaySize(manifest, cw, ch, width, 96)
+		if renderWidth > previewCanvasWidth/previewColumns-20 || height > previewCanvasHeight-40 {
+			return nil, fmt.Errorf("cat %d (%q) is %dx%d at --width %d and does not fit the preview; reduce --width", i+1, spec.Name, renderWidth, height, width)
 		}
-		cats = append(cats, previewCat{Spec: spec, Atlas: atlas, Manifest: manifest, Player: NewAnimationPlayer(manifest), Width: width, Height: height, ExperimentalMovement: cfg.ExperimentalMovement})
+		cats = append(cats, previewCat{Spec: spec, Atlas: atlas, Manifest: manifest, Player: NewAnimationPlayer(manifest), Width: renderWidth, Height: height, ExperimentalMovement: cfg.ExperimentalMovement})
 	}
 	return cats, nil
 }

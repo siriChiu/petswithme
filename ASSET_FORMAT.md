@@ -190,3 +190,12 @@ flag. This permits normal/slow real-engine comparisons while revising generated
 gaits. Verified stride calibration always takes precedence. A trial speed is not
 proof of planted paws or a natural gait, and unverified running still requires
 the user's experimental-movement opt-in.
+
+Optional top-level `referenceWidth` (16–4096 source pixels; omitted is legacy)
+lets a wider transparent canvas retain the existing character scale. For example,
+384×288 with referenceWidth 320 uses a 230×172px window at the 192px size setting;
+the same body pixels keep approximately the old scale. All sizes and monitor DPI
+use this reference. Center existing frames consistently in the wider canvas and
+update gazeOrigin/anchors to the new normalized coordinates. Movement stride and
+trial-speed ratios still use full canvas widths: rebase old ratios when padding
+changes, so extra transparent room does not accelerate an existing gait.

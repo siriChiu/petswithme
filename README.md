@@ -235,3 +235,8 @@ Explicit play/jump commands play one complete clip rather than repeating a short
 jump for a fixed five seconds. The recovery is presented before returning to idle;
 delayed timer delivery cannot expire the action before its first visible pose.
 Repeated deliberate commands restart it, and dragging still interrupts at once.
+
+Private packs can declare a reference width when adding transparent room for a
+horizontal tail. The native size preference and DPI keep the existing body scale;
+window bounds, drag/hit testing and cached rendering use the wider physical
+canvas. Legacy packs retain their previous size arithmetic.
