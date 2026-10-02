@@ -247,3 +247,13 @@ A press freezes autonomous motion immediately, but pickup artwork begins only
 after the pointer crosses the existing drag threshold. Ordinary clicks and
 double-clicks therefore avoid flashing a pickup pose before petting or jumping.
 Capture cancellation, hiding and temporary click-through release pressed state.
+
+Isolated frame-deadline experiment: normal-mode updates may wake at the next
+pose deadline while retaining a maximum nominal 50 ms movement interval. It does
+not change image files, authored durations, posture ordering or travel speed.
+Earlier armed wakes are preserved when settings callbacks reschedule. Quiet,
+busy, dragging and hidden timer policies are retained; no system timer-resolution
+change is requested. Windows delivery is best effort, so this is not a 60 FPS
+promise or a remedy for missing/inconsistent poses. The Windows test records
+actual SetTimer/message-loop cadence, visible pose holds, update counts and
+process CPU time for baseline/adaptive runs with synthetic moving windows.

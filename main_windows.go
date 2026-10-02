@@ -151,6 +151,8 @@ var app struct {
 	Frames                            map[string][]byte
 	CachedBytes                       int
 	TimerIntervalMS                   int
+	TimerBaseMS                       int
+	TimerDeadline                     float64
 	Engine                            *BehaviorEngine
 	CPU                               CPUMonitor
 	Settings                          Settings
@@ -272,17 +274,36 @@ func setInterval() {
 		dragging = dragging || p.Down
 	}
 	busy := app.Engine != nil && app.Engine.Load != nil && app.Engine.Load.Active
-	ms := RenderIntervalMS(app.Settings, busy, dragging, app.Hidden, app.Engine.DirectAnimationActive())
-	if ms == app.TimerIntervalMS {
+	baseMS := RenderIntervalMS(app.Settings, busy, dragging, app.Hidden, app.Engine.DirectAnimationActive())
+	ms := baseMS
+	now := nowSeconds()
+	if frameDeadlineScheduling {
+		sinceTickMS := (now - app.LastTime) * 1000
+		if app.TimerBaseMS != baseMS {
+			sinceTickMS = 0
+		}
+		ms = FrameDeadlineMS(app.Engine, ms, sinceTickMS)
+	}
+	if frameDeadlineScheduling && baseMS == 50 {
+		// SetTimer resets an existing timer. Keep an earlier pending wake,
+		// including one now less than the Win32 10ms minimum away.
+		if app.TimerBaseMS == baseMS && app.TimerDeadline > now && app.TimerDeadline <= now+float64(ms)/1000 {
+			return
+		}
+	} else if ms == app.TimerIntervalMS {
 		return
 	}
 	if ms == 0 {
 		killTimer.Call(app.Controller, 1)
 		app.TimerIntervalMS = 0
+		app.TimerBaseMS = 0
+		app.TimerDeadline = 0
 		return
 	}
 	if timer, _, _ := setTimer.Call(app.Controller, 1, uintptr(ms), 0); timer != 0 {
 		app.TimerIntervalMS = ms
+		app.TimerBaseMS = baseMS
+		app.TimerDeadline = now + float64(ms)/1000
 	}
 }
 
