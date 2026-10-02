@@ -51,8 +51,8 @@ func measureNativeDeadlines(t *testing.T, adaptive bool, count int) deadlineMeas
 		for _, p := range app.Pets {
 			p.DIB.Close()
 		}
-		for _, f := range fixtures {
-			f.close()
+		for i := len(fixtures) - 1; i >= 0; i-- {
+			fixtures[i].close()
 		}
 		app = old
 		frameDeadlineScheduling = oldMode
@@ -115,7 +115,10 @@ func measureNativeDeadlines(t *testing.T, adaptive bool, count int) deadlineMeas
 	setInterval()
 	start := time.Now()
 	const warmup = 1.2
-	const duration = 4.5
+	duration := 4.5
+	if count == 3 {
+		duration = 16.2
+	}
 	lastIndex := make([]int, count)
 	lastChange := make([]float64, count)
 	cpuStart, measurementStart := 0.0, 0.0
@@ -129,6 +132,13 @@ func measureNativeDeadlines(t *testing.T, adaptive bool, count int) deadlineMeas
 			}
 			if msg.HWND == app.Controller && msg.Message == 0x113 && msg.WParam == 1 {
 				begin := time.Now()
+				// Keep the synthetic rectangles visible during longer CPU samples.
+				// This test-only wrap leaves the animation player and clock intact.
+				for _, c := range app.Engine.Cats {
+					if c.X < 100 {
+						c.X = 600
+					}
+				}
 				tick()
 				elapsed := time.Since(start).Seconds()
 				cost := time.Since(begin).Seconds() * 1000
