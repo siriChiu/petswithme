@@ -433,7 +433,14 @@ func previewActionForCat(cat previewCat, scene previewScene) string {
 	}
 	d, _ := strconv.Atoi(strings.TrimPrefix(scene.Action, "gaze_"))
 	count := ManifestGazeDirections(cat.Manifest)
-	return "gaze_" + strconv.Itoa(int(math.Round(float64(d)*float64(count)/float64(scene.GazeDirections)))%count)
+	sector := float64(d) * float64(count) / float64(scene.GazeDirections)
+	if cat.Manifest.GazeNearestAuthored {
+		if nearest, ok := nearestAuthoredGaze(cat.Manifest, scene.Mood, sector, 0, false); ok {
+			return "gaze_" + strconv.Itoa(nearest)
+		}
+		return "idle"
+	}
+	return "gaze_" + strconv.Itoa(int(math.Round(sector))%count)
 }
 func previewActionForSource(cat previewCat, scene previewScene) previewActionSource {
 	return previewResolvedSource(cat, previewActionForCat(cat, scene), scene.Mood)

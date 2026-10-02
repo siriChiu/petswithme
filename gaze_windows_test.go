@@ -102,6 +102,30 @@ func TestWindowsGazeSweepRendersWithoutFocus(t *testing.T) {
 			t.Fatal("pointer boundary flashed idle in the native surface", frame.Action)
 		}
 	}
+	// A partial set must use real angular neighbors rather than fixed alias
+	// bins, including when the input angle lies across the up-direction seam.
+	m.GazeNearestAuthored = true
+	for d := 1; d < 32; d += 2 {
+		if d != 15 {
+			m.Actions["gaze_"+itoaDirection(d)] = AnimationAction{Fallback: "gaze_" + itoaDirection((d+1)%32)}
+		}
+	}
+	for i, tc := range []struct {
+		degrees float64
+		want    int
+	}{{6, 0}, {12, 2}, {30, 2}, {164, 15}, {175, 16}, {359, 0}} {
+		e.States[0].GazeActive = false
+		a := tc.degrees * math.Pi / 180
+		frame = e.Tick(60+float64(i), .05, ox+1000*math.Sin(a), oy-1000*math.Cos(a), 0, true)[0]
+		if err := renderFrame(pet, frame); err != nil {
+			t.Fatal(err)
+		}
+		pixels := unsafe.Slice((*byte)(pet.DIB.Bits), smokeWidth*smokeHeight*4)
+		center := (smokeHeight/2*smokeWidth + smokeWidth/2) * 4
+		if pixels[center+2] != uint8(32+tc.want*6) {
+			t.Fatal("partial gaze angle selected wrong native pixels", tc.degrees, frame.Action)
+		}
+	}
 	fg, _, _ := smokeGetForeground.Call()
 	if fg == f.pet || fg == f.probe {
 		t.Fatal("gaze stole focus")

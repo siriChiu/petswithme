@@ -15,13 +15,14 @@ import (
 // Schema 1 supports the legacy atlas and optional pixel rectangles in that image.
 // A fallback is an honest reuse of artwork, not a claim of additional drawings.
 type AnimationManifest struct {
-	ReferenceWidth int                        `json:"referenceWidth,omitempty"`
-	GazeDirections int                        `json:"gazeDirections,omitempty"`
-	SchemaVersion  int                        `json:"schemaVersion"`
-	Fallback       string                     `json:"fallback"`
-	Anchor         AnimationAnchor            `json:"anchor"`
-	GazeOrigin     *AnimationAnchor           `json:"gazeOrigin,omitempty"`
-	Actions        map[string]AnimationAction `json:"actions"`
+	ReferenceWidth      int                        `json:"referenceWidth,omitempty"`
+	GazeDirections      int                        `json:"gazeDirections,omitempty"`
+	GazeNearestAuthored bool                       `json:"gazeNearestAuthored,omitempty"`
+	SchemaVersion       int                        `json:"schemaVersion"`
+	Fallback            string                     `json:"fallback"`
+	Anchor              AnimationAnchor            `json:"anchor"`
+	GazeOrigin          *AnimationAnchor           `json:"gazeOrigin,omitempty"`
+	Actions             map[string]AnimationAction `json:"actions"`
 }
 type AnimationAnchor struct {
 	X float64 `json:"x"`

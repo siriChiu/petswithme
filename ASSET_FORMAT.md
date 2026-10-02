@@ -199,3 +199,11 @@ use this reference. Center existing frames consistently in the wider canvas and
 update gazeOrigin/anchors to the new normalized coordinates. Movement stride and
 trial-speed ratios still use full canvas widths: rebase old ratios when padding
 changes, so extra transparent room does not accelerate an existing gait.
+
+Partial gaze packs can opt into `"gazeNearestAuthored":true`. Pointer selection
+then uses the closest angle that has its own non-demo default or current-mood
+loop. Alias-only entries do not create directions. Angular hysteresis scales
+with the actual neighboring angle gap; radial hysteresis still applies. This
+preserves old angle boundaries where no in-between art exists. The option is
+off by default for backward compatibility. Metadata separately reports declared
+index count, direct authored indices, and distinct rendered drawings.

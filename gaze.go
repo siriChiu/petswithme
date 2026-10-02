@@ -50,10 +50,17 @@ func (e *BehaviorEngine) pointerGaze(i int, cursorX, cursorY float64) string {
 	}
 	count := ManifestGazeDirections(s.Player.Manifest)
 	direction := GazeDirectionCount(dx, dy, count)
-	// Retain the previous sector for an extra 15% of a sector at a boundary.
-	// This prevents pixel-scale cursor tremor from flashing between poses.
-	if s.GazeActive {
-		sector := math.Atan2(dx, -dy) * float64(count) / (2 * math.Pi)
+	sector := math.Atan2(dx, -dy) * float64(count) / (2 * math.Pi)
+	if s.Player.Manifest.GazeNearestAuthored {
+		var ok bool
+		direction, ok = nearestAuthoredGaze(s.Player.Manifest, s.Mood, sector, s.GazeDirection, s.GazeActive)
+		if !ok {
+			s.GazeActive = false
+			return "idle"
+		}
+		// Retain the previous sector for an extra 15% of a sector at a boundary.
+		// This prevents pixel-scale cursor tremor from flashing between poses.
+	} else if s.GazeActive {
 		delta := math.Mod(sector-float64(s.GazeDirection)+float64(count)*1.5, float64(count)) - float64(count)/2
 		if math.Abs(delta) <= .65 {
 			direction = s.GazeDirection
@@ -66,4 +73,45 @@ func (e *BehaviorEngine) pointerGaze(i int, cursorX, cursorY float64) string {
 	}
 	s.GazeDirection, s.GazeActive = direction, true
 	return action
+}
+
+func gazeSectorDelta(a, b float64, count int) float64 {
+	return math.Mod(a-b+float64(count)*1.5, float64(count)) - float64(count)/2
+}
+
+// Partial packs opt in to nearest genuine angle selection. Fixed aliases must
+// not move old angle boundaries or be counted as extra authored directions.
+func nearestAuthoredGaze(m *AnimationManifest, mood string, sector float64, previous int, active bool) (int, bool) {
+	count := ManifestGazeDirections(m)
+	best, bestDistance, bestDelta := -1, math.Inf(1), math.Inf(-1)
+	previousPresent := false
+	for i := 0; i < count; i++ {
+		a, ok := m.Actions["gaze_"+itoaDirection(i)]
+		if !ok || a.DemoFallback {
+			continue
+		}
+		clip, moodSpecific := a.Moods[mood]
+		if (!moodSpecific || len(clip.Loop) == 0) && len(a.Loop) == 0 {
+			continue
+		}
+		previousPresent = previousPresent || i == previous
+		delta := gazeSectorDelta(float64(i), sector, count)
+		distance := math.Abs(delta)
+		// Exact midpoints prefer the clockwise endpoint, as uniform rounding
+		// did. Once a pose is active, the hysteresis check below wins the tie.
+		if distance < bestDistance-1e-9 || (math.Abs(distance-bestDistance) <= 1e-9 && delta > bestDelta) {
+			best, bestDistance, bestDelta = i, distance, delta
+		}
+	}
+	if best < 0 {
+		return 0, false
+	}
+	if active && previousPresent && previous != best {
+		gap := math.Abs(gazeSectorDelta(float64(previous), float64(best), count))
+		previousDistance := math.Abs(gazeSectorDelta(float64(previous), sector, count))
+		if previousDistance-bestDistance <= .3*gap {
+			best = previous
+		}
+	}
+	return best, true
 }
