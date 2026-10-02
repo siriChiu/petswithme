@@ -81,6 +81,14 @@ corrected source art's planted-paw trajectory; it is not a speed guessed from
 appearance. The engine computes pixels/second from canvas width × strideRatio ÷
 loop duration, so frame timing changes and display scaling stay coupled.
 
+Only elapsed time in an already displayed locomotion loop translates the root.
+Optional start/end clips are stationary; no displacement is inferred for them.
+A new direction first shows its entry pose. If the old clip declares an end,
+turning finishes that recovery before starting the opposite direction. Arrival
+also preserves the end sequence. Dragging, petting, quiet mode and other higher
+priorities still interrupt immediately. A pack may explicitly reuse a grounded
+loop frame for a short stop hold, but this is not additional transition artwork.
+
 Without explicit calibration, genuine multi-frame walking keeps the conservative
 legacy speed and is reported as uncalibrated by the preview tool. Missing,
 single-pose, or known idle/sit/sleep fallback walks do not move the cat. Distinct

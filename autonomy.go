@@ -98,6 +98,17 @@ func (e *BehaviorEngine) movementSpeed(i int, action string) float64 {
 	}
 	return LocomotionPixelsPerSecond(s.Player.Manifest, action, s.Mood, c.W)
 }
+
+// movementDistance integrates only time during a previously displayed loop.
+// Entry/recovery poses are stationary. A new direction must first be shown,
+// rather than borrowing the previous direction's elapsed tick.
+func (e *BehaviorEngine) movementDistance(i int, action string) float64 {
+	s := e.States[i]
+	if s.Player.Action != action || s.Player.Mood != s.Mood || s.Player.Generation != s.LastPresentedGeneration {
+		return 0
+	}
+	return e.movementSpeed(i, action) * s.MotionSeconds
+}
 func (e *BehaviorEngine) movementAction(i int, direction float64, preferRun bool) string {
 	s := e.States[i]
 	suffix := "right"
@@ -148,6 +159,14 @@ func (e *BehaviorEngine) dwell(i int) float64 {
 }
 func (e *BehaviorEngine) finishAutonomy(i int, now float64) {
 	s := e.States[i]
+	if isLocomotion(s.Player.Action) && s.Player.Phase != AnimationDone && len(s.Player.clip.End) > 0 {
+		s.Action, s.Priority, s.Until = s.Player.Action, PriorityPlay, now
+		s.Ending = true
+		s.HasDestination = false
+		s.NextDecision = now + e.dwell(i)
+		s.Player.Stop()
+		return
+	}
 	s.Action, s.Priority, s.Until = "idle", PriorityIdle, 0
 	s.HasDestination = false
 	s.NextDecision = now + e.dwell(i)
@@ -275,7 +294,7 @@ func (e *BehaviorEngine) decideAutonomy(i int, now float64) {
 			c.Direction = -1
 		}
 		speed := e.movementSpeed(i, selected.action)
-		duration = math.Min(18, math.Abs(selected.target-c.X)/math.Max(1, speed)+.3)
+		duration = math.Min(18, math.Abs(selected.target-c.X)/math.Max(1, speed)+.3) + clipSeconds(m.Resolve(selected.action, s.Mood).Start)
 	}
 	s.Until = now + duration
 	s.NextDecision = s.Until + e.dwell(i)
@@ -302,8 +321,10 @@ func (e *BehaviorEngine) tickAutonomy(i int, now, dt, cursorX, cursorY float64) 
 					action = "walk_left"
 				}
 			}
-			e.moveToward(i, target, c.Y, e.movementSpeed(i, action)*dt)
-			if math.Abs(c.X-oldX) < .001 && dt > 0 {
+			distance := e.movementDistance(i, action)
+			boundX, _ := ClampPosition(target, c.Y, c.W, c.H, c.Bounds)
+			e.moveToward(i, target, c.Y, distance)
+			if e.movementSpeed(i, action) <= 0 || (distance > 0 && math.Abs(c.X-oldX) < .001) || math.Abs(boundX-c.X) < .001 {
 				e.finishAutonomy(i, now)
 			} else {
 				s.Action = action

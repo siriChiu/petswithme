@@ -411,6 +411,8 @@ type BehaviorFrame struct {
 	Generation uint64
 }
 type CatBehavior struct {
+	MotionTurning                                      bool
+	MotionSeconds                                      float64
 	LastPresentedGeneration                            uint64
 	LastPresentedPhase                                 AnimationPhase
 	Action, Mood                                       string
@@ -462,6 +464,7 @@ func (e *BehaviorEngine) SetManifest(i int, m *AnimationManifest) bool {
 	}
 	s := e.States[i]
 	s.Player.Manifest = m
+	s.MotionTurning = false
 	s.GazeActive = false
 	s.Player.Play(s.Action, s.Mood)
 	s.Ending = false
@@ -478,6 +481,7 @@ func (e *BehaviorEngine) Cancel(i int, now float64) {
 	s.Action = "idle"
 	s.Priority = PriorityIdle
 	s.GazeActive = false
+	s.MotionTurning = false
 	s.Until = 0
 	s.Ending = false
 	s.NextDecision = now + 8
@@ -531,6 +535,7 @@ func (e *BehaviorEngine) Request(i int, action string, priority BehaviorPriority
 	s.Autonomous = false
 	s.BusyStretching = false
 	s.BusyStretchEnding = false
+	s.MotionTurning = false
 	// A fresh release-click can arrive before the next timer sees Dragging=false.
 	// It replaces the drag instead of being mistaken for stale pre-drag work.
 	s.WasDragging = false
@@ -565,7 +570,9 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		s := e.States[i]
 		// Advance only the action that was actually visible during the elapsed
 		// interval. A newly requested action or exit must show its first pose.
+		s.MotionSeconds = 0
 		if s.Player.Generation == s.LastPresentedGeneration && !(s.Player.Phase == AnimationEnd && s.LastPresentedPhase != AnimationEnd) {
+			s.MotionSeconds = s.Player.loopSeconds(dt)
 			s.Player.Tick(dt)
 		}
 		busy[i] = e.cpuEligible(i, quiet)
@@ -685,8 +692,9 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 					if action == "" || math.Hypot(intent.TargetX-c.X, intent.TargetY-c.Y) <= 1 {
 						action = "idle"
 					} else {
-						e.moveToward(i, intent.TargetX, intent.TargetY, e.movementSpeed(i, action)*dt)
-						if math.Hypot(c.X-oldX, c.Y-oldY) < .01 {
+						distance := e.movementDistance(i, action)
+						e.moveToward(i, intent.TargetX, intent.TargetY, distance)
+						if distance > 0 && math.Hypot(c.X-oldX, c.Y-oldY) < .01 {
 							action = "idle"
 						}
 					}
@@ -702,8 +710,27 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		} else {
 			s.GazeActive = false
 		}
+		// A direction change may reuse an explicitly declared grounded recovery
+		// before starting the opposite clip. Direct input still cancels at once.
+		finishingMotion := false
+		if s.MotionTurning {
+			if !isLocomotion(action) || s.Ending || s.Player.Phase == AnimationDone {
+				s.MotionTurning = false
+			} else {
+				action = s.Player.Action
+				finishingMotion = true
+			}
+		} else if isLocomotion(action) && isLocomotion(s.Player.Action) && action != s.Player.Action && !s.Ending && len(s.Player.clip.End) > 0 {
+			s.Player.Stop()
+			s.MotionTurning = true
+			if s.Priority == PriorityWander {
+				s.Until += clipSeconds(s.Player.clip.End)
+			}
+			action = s.Player.Action
+			finishingMotion = true
+		}
 		c.Mode = action
-		if !s.Ending && !finishingSocial {
+		if !s.Ending && !finishingSocial && !finishingMotion {
 			s.Player.Set(action, s.Mood)
 		}
 		frame := s.Player.Frame()

@@ -224,3 +224,9 @@ The app retains its low-resource 50ms normal timer, 100ms busy timer, 250ms quie
 timer and 16ms drag timer. Additional genuine animation poses subdivide existing
 clip durations rather than speeding up playback. A higher repaint rate is not a
 substitute for extra authored drawings.
+
+Locomotion timing now moves only during displayed loop time. Optional entry and
+recovery frames remain stationary; arrival and direction changes finish a declared
+recovery before the next motion clip. This removes an extra first-tick slide and
+skipped recovery poses. It does not correct inconsistent paw trajectories in the
+artwork, and reused contact holds are not newly drawn transitions.

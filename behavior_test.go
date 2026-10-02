@@ -509,6 +509,8 @@ func TestBehaviorMovementTravelsMeasuredStridePerCycle(t *testing.T) {
 	s.Action = "walk_right"
 	s.Priority = PriorityWander
 	s.Until = 20
+	// Present the first pose before measuring one complete visible cycle.
+	e.Tick(0, 0, math.NaN(), math.NaN(), 0, false)
 	elapsed := 0.0
 	for _, dt := range []float64{.05, .15, .1, .1, .2} {
 		elapsed += dt
