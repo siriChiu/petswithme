@@ -221,7 +221,9 @@ existing engine. The dialog is an explicitly opened normal window; pet windows
 remain nonactivating. No global keyboard shortcut or key monitoring is installed.
 
 The app retains its low-resource 50ms normal timer, 100ms busy timer, 250ms quiet
-timer and 16ms drag timer. Additional genuine animation poses subdivide existing
+idle timer and 16ms drag timer. Deliberate pet/play interactions temporarily use
+50ms even in quiet mode, through their full recovery; idle then returns to 250ms.
+Additional genuine animation poses subdivide existing
 clip durations rather than speeding up playback. A higher repaint rate is not a
 substitute for extra authored drawings.
 

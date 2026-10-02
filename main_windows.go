@@ -150,6 +150,7 @@ var app struct {
 	Windows                           map[uintptr]*PetWindow
 	Frames                            map[string][]byte
 	CachedBytes                       int
+	TimerIntervalMS                   int
 	Engine                            *BehaviorEngine
 	CPU                               CPUMonitor
 	Settings                          Settings
@@ -271,12 +272,18 @@ func setInterval() {
 		dragging = dragging || p.Down
 	}
 	busy := app.Engine != nil && app.Engine.Load != nil && app.Engine.Load.Active
-	ms := RenderIntervalMS(app.Settings, busy, dragging, app.Hidden)
-	if ms == 0 {
-		killTimer.Call(app.Controller, 1)
+	ms := RenderIntervalMS(app.Settings, busy, dragging, app.Hidden, app.Engine.DirectAnimationActive())
+	if ms == app.TimerIntervalMS {
 		return
 	}
-	setTimer.Call(app.Controller, 1, uintptr(ms), 0)
+	if ms == 0 {
+		killTimer.Call(app.Controller, 1)
+		app.TimerIntervalMS = 0
+		return
+	}
+	if timer, _, _ := setTimer.Call(app.Controller, 1, uintptr(ms), 0); timer != 0 {
+		app.TimerIntervalMS = ms
+	}
 }
 
 func save() {
@@ -364,7 +371,7 @@ func tick() {
 	if app.Hidden {
 		return
 	}
-	dt := math.Min(.2, now-app.LastTime)
+	dt := math.Min(.25, now-app.LastTime)
 	app.LastTime = now
 	p, cursorValid := readCurrentCursor()
 	if now-app.LastIdleCheck >= 1 {
@@ -405,7 +412,7 @@ func tick() {
 			return
 		}
 	}
-
+	setInterval()
 }
 func addTray() bool {
 	app.Tray = NotifyData{Size: uint32(unsafe.Sizeof(NotifyData{})), HWND: app.Controller, ID: 1, Flags: 1 | 2 | 4, Callback: wmTray, Icon: app.Icon}
@@ -660,6 +667,7 @@ func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 				app.Engine.Cancel(p.Index, nowSeconds())
 				app.Engine.Play(p.Index, nowSeconds())
 			}
+			setInterval()
 			return 0
 		case 0x0205:
 			menu()
