@@ -247,3 +247,9 @@ A press freezes autonomous motion immediately, but pickup artwork begins only
 after the pointer crosses the existing drag threshold. Ordinary clicks and
 double-clicks therefore avoid flashing a pickup pose before petting or jumping.
 Capture cancellation, hiding and temporary click-through release pressed state.
+
+Social movement checks the reachable path before choosing a moving pose. Cats do
+not pair through a third cat, hold idle while blocked, and resume follow/chase
+only after a small travel gap opens. Authored stationary entry is preserved,
+including tiny positive movement time at a frame boundary. This prevents rapid
+idle/movement picture swaps without changing animation drawings or duration.

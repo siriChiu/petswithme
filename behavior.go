@@ -448,6 +448,7 @@ type CatBehavior struct {
 	ActionCooldown                                     map[string]float64
 	GazeDirection                                      int
 	GazeActive                                         bool
+	SocialMoving                                       bool
 	AfterAction                                        string
 	Autonomous                                         bool
 	BusyElapsed, BusyNextStretch, BusyStretchRemaining float64
@@ -487,6 +488,7 @@ func (e *BehaviorEngine) SetManifest(i int, m *AnimationManifest) bool {
 	s.MotionTurning = false
 	s.OneShot = false
 	s.GazeActive = false
+	s.SocialMoving = false
 	s.Player.Play(s.Action, s.Mood)
 	s.Ending = false
 	s.HasDestination = false
@@ -502,6 +504,7 @@ func (e *BehaviorEngine) Cancel(i int, now float64) {
 	s.Action = "idle"
 	s.Priority = PriorityIdle
 	s.GazeActive = false
+	s.SocialMoving = false
 	s.MotionTurning = false
 	s.OneShot = false
 	s.Until = 0
@@ -724,18 +727,28 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 				if intent.Move {
 					direction := intent.TargetX - c.X
 					action = e.movementAction(i, direction, intent.Action == "chase")
-					oldX, oldY := c.X, c.Y
-					if action == "" || math.Hypot(intent.TargetX-c.X, intent.TargetY-c.Y) <= 1 {
+					// Check the reachable path before selecting a moving pose. A
+					// blocked cat must not restart its entry on every other tick.
+					path := math.Hypot(intent.TargetX-c.X, intent.TargetY-c.Y)
+					rx, ry := e.moveTowardPosition(i, intent.TargetX, intent.TargetY, path)
+					reachable := math.Hypot(rx-c.X, ry-c.Y)
+					threshold := 1.0
+					if !s.SocialMoving && (intent.Action == "follow" || intent.Action == "chase") {
+						threshold = math.Max(4, math.Max(float64(c.W)*.02, e.movementSpeed(i, action)*.25))
+					}
+					if action == "" || reachable <= threshold {
 						action = "idle"
+						s.SocialMoving = false
 					} else {
+						s.SocialMoving = true
 						distance := e.movementDistance(i, action)
 						e.moveToward(i, intent.TargetX, intent.TargetY, distance)
-						if distance > 0 && math.Hypot(c.X-oldX, c.Y-oldY) < .01 {
-							action = "idle"
-						}
 					}
+				} else {
+					s.SocialMoving = false
 				}
 			} else {
+				s.SocialMoving = false
 				action = e.tickAutonomy(i, now, dt, cursorX, cursorY)
 			}
 		}
@@ -787,11 +800,17 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 // moveToward clamps the path before a neighbor, including when a long timer tick
 // would otherwise step through it. Cats on other monitors are never obstacles.
 func (e *BehaviorEngine) moveToward(i int, x, y, speed float64) {
+	e.Cats[i].X, e.Cats[i].Y = e.moveTowardPosition(i, x, y, speed)
+}
+
+// The same collision calculation is used for preflight and actual movement.
+// Asking whether a path is open never moves the cat or its animation clock.
+func (e *BehaviorEngine) moveTowardPosition(i int, x, y, speed float64) (float64, float64) {
 	c := e.Cats[i]
 	dx, dy := x-c.X, y-c.Y
 	distance := math.Hypot(dx, dy)
 	if distance == 0 || speed <= 0 {
-		return
+		return c.X, c.Y
 	}
 	scale := math.Min(1, speed/distance)
 	nx, ny := ClampPosition(c.X+dx*scale, c.Y+dy*scale, c.W, c.H, c.Bounds)
@@ -826,7 +845,7 @@ func (e *BehaviorEngine) moveToward(i int, x, y, speed float64) {
 			ny = c.Y
 		}
 	}
-	c.X, c.Y = ClampPosition(nx, ny, c.W, c.H, c.Bounds)
+	return ClampPosition(nx, ny, c.W, c.H, c.Bounds)
 }
 
 type SocialIntent struct {
@@ -904,6 +923,19 @@ func (s *SocialCoordinator) Start(cats []*Cat, a, b int, now float64) bool {
 	if ca.X > cb.X {
 		a, b = b, a
 		ca, cb = cb, ca
+	}
+	// Do not invite cats on opposite sides of a third cat to walk through it.
+	// A later dragged-in obstacle is handled by movement preflight as well.
+	for i, other := range cats {
+		if i == a || i == b || other == nil || other.Bounds != ca.Bounds {
+			continue
+		}
+		if other.Y+float64(other.H) <= ca.Y || other.Y >= ca.Y+float64(ca.H) {
+			continue
+		}
+		if other.X < cb.X && other.X+float64(other.W) > ca.X+float64(ca.W) {
+			return false
+		}
 	}
 	s.generation++
 	p := &SocialPlan{ID: s.generation, A: a, B: b, Leader: b, Phase: "approach", Started: now, PhaseUntil: now + 10, Bounds: ca.Bounds}
