@@ -358,6 +358,10 @@ func (e *BehaviorEngine) tickAutonomy(i int, now, dt, cursorX, cursorY float64) 
 func itoaDirection(i int) string { return strconv.Itoa(i) }
 
 func (e *BehaviorEngine) configureSocial() {
+	e.Social.MovementEnded = func(i int) bool {
+		p := e.States[i].Player
+		return !isLocomotion(p.Action) || len(p.clip.End) == 0 || p.Phase == AnimationDone
+	}
 	e.Social.GreetingDuration = func(i int) float64 { s := e.States[i]; return actionCycle(s.Player.Manifest, "greet", s.Mood) }
 	e.Social.GreetingEnded = func(i int) bool {
 		p := e.States[i].Player

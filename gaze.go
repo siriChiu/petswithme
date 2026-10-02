@@ -38,7 +38,13 @@ func (e *BehaviorEngine) pointerGaze(i int, cursorX, cursorY float64) string {
 	s, c := e.States[i], e.Cats[i]
 	ox, oy := ManifestGazeOrigin(c, s.Player.Manifest)
 	dx, dy := cursorX-ox, cursorY-oy
-	if !finite(cursorX) || !finite(cursorY) || !finite(ox) || !finite(oy) || math.Hypot(dx, dy) < math.Max(8, float64(c.W)*.05) {
+	radius := math.Max(8, float64(c.W)*.05)
+	// Use separate enter/exit radii as well as angular hysteresis. A pointer
+	// resting on the face boundary must not flash between idle and a gaze pose.
+	if s.GazeActive {
+		radius *= .75
+	}
+	if !finite(cursorX) || !finite(cursorY) || !finite(ox) || !finite(oy) || math.Hypot(dx, dy) < radius {
 		s.GazeActive = false
 		return "idle"
 	}

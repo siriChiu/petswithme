@@ -81,6 +81,27 @@ func TestWindowsGazeSweepRendersWithoutFocus(t *testing.T) {
 			t.Fatalf("direction%d did not reach native DIB", d)
 		}
 	}
+	// Check actual presented pixels around the idle/gaze boundary, too.
+	// This must not flash the differently colored idle frame on alternate ticks.
+	frame := e.Tick(40, .05, ox+100, oy, 0, true)[0]
+	if err := renderFrame(pet, frame); err != nil {
+		t.Fatal(err)
+	}
+	for n := 0; n < 20; n++ {
+		x := ox + 7
+		if n%2 == 0 {
+			x = ox + 9
+		}
+		frame = e.Tick(40.05+float64(n)*.05, .05, x, oy, 0, true)[0]
+		if err := renderFrame(pet, frame); err != nil {
+			t.Fatal(err)
+		}
+		pixels := unsafe.Slice((*byte)(pet.DIB.Bits), smokeWidth*smokeHeight*4)
+		center := (smokeHeight/2*smokeWidth + smokeWidth/2) * 4
+		if pixels[center+2] != 80 {
+			t.Fatal("pointer boundary flashed idle in the native surface", frame.Action)
+		}
+	}
 	fg, _, _ := smokeGetForeground.Call()
 	if fg == f.pet || fg == f.probe {
 		t.Fatal("gaze stole focus")

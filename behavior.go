@@ -438,6 +438,7 @@ type CatBehavior struct {
 	Action, Mood                                       string
 	Priority                                           BehaviorPriority
 	Until, NextDecision                                float64
+	PendingDuration                                    float64
 	Player                                             *AnimationPlayer
 	WasDragging                                        bool
 	Ending                                             bool
@@ -487,6 +488,7 @@ func (e *BehaviorEngine) SetManifest(i int, m *AnimationManifest) bool {
 	s.Player.Manifest = m
 	s.MotionTurning = false
 	s.OneShot = false
+	s.PendingDuration = 0
 	s.GazeActive = false
 	s.SocialMoving = false
 	s.Player.Play(s.Action, s.Mood)
@@ -507,6 +509,7 @@ func (e *BehaviorEngine) Cancel(i int, now float64) {
 	s.SocialMoving = false
 	s.MotionTurning = false
 	s.OneShot = false
+	s.PendingDuration = 0
 	s.Until = 0
 	s.Ending = false
 	s.NextDecision = now + 8
@@ -563,6 +566,7 @@ func (e *BehaviorEngine) Request(i int, action string, priority BehaviorPriority
 	s.Action = action
 	s.Priority = priority
 	s.Until = now + duration
+	s.PendingDuration = duration
 	s.Ending = false
 	s.HasDestination = false
 	s.AfterAction = ""
@@ -603,6 +607,15 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 			continue
 		}
 		s := e.States[i]
+		// A requested animation's visible duration starts with its first
+		// presentation, even if a modal UI or a delayed timer held that up.
+		if s.PendingDuration > 0 && !c.Dragging && !c.Pressed {
+			if s.Player.Phase == AnimationStart || s.Player.Phase == AnimationLoop {
+				s.Until = now + s.PendingDuration
+				s.NextDecision = s.Until + 8
+			}
+			s.PendingDuration = 0
+		}
 		// Advance only the action that was actually visible during the elapsed
 		// interval. A newly requested action or exit must show its first pose.
 		s.MotionSeconds = 0
@@ -712,6 +725,7 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		default:
 			if intent, ok := intents[i]; ok {
 				s.Action = intent.Action
+				s.Autonomous = true
 				s.HasDestination = false
 				s.Priority = PrioritySocial
 				s.Until = now + .5
@@ -762,14 +776,15 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		// A direction change may reuse an explicitly declared grounded recovery
 		// before starting the opposite clip. Direct input still cancels at once.
 		finishingMotion := false
+		normalSocial := s.Priority == PrioritySocial && !blocked[i] && !busy[i] && !quiet && idleSeconds < 180
 		if s.MotionTurning {
-			if !isLocomotion(action) || s.Ending || s.Player.Phase == AnimationDone {
+			if (!isLocomotion(action) && !normalSocial) || s.Ending || s.Player.Phase == AnimationDone {
 				s.MotionTurning = false
 			} else {
 				action = s.Player.Action
 				finishingMotion = true
 			}
-		} else if isLocomotion(action) && isLocomotion(s.Player.Action) && action != s.Player.Action && !s.Ending && len(s.Player.clip.End) > 0 {
+		} else if isLocomotion(s.Player.Action) && action != s.Player.Action && (isLocomotion(action) || normalSocial) && !s.Ending && s.Player.Phase != AnimationDone && len(s.Player.clip.End) > 0 {
 			s.Player.Stop()
 			s.MotionTurning = true
 			if s.Priority == PriorityWander {
@@ -872,6 +887,7 @@ type SocialCoordinator struct {
 	Supports         func(int, string) bool
 	GreetingDuration func(int) float64
 	GreetingEnded    func(int) bool
+	MovementEnded    func(int) bool
 	Sociability      []float64
 }
 
@@ -952,6 +968,16 @@ func (s *SocialCoordinator) Start(cats []*Cat, a, b int, now float64) bool {
 	return true
 }
 func socialGap(a, b *Cat) float64 { return math.Max(10, float64(max(a.W, b.W))*.12) }
+func (s *SocialCoordinator) beginGreeting(p *SocialPlan, a, b *Cat, now float64) {
+	p.Phase = "greet"
+	p.PhaseUntil = now + 2.4
+	if s.GreetingDuration != nil {
+		p.PhaseUntil = now + math.Max(2.4, math.Max(s.GreetingDuration(p.A), s.GreetingDuration(p.B)))
+	}
+	if s.Supports != nil && (!s.Supports(p.A, "greet") || !s.Supports(p.B, "greet")) {
+		s.beginFollowing(p, a, b, now)
+	}
+}
 func (s *SocialCoordinator) beginFollowing(p *SocialPlan, a, b *Cat, now float64) {
 	p.Phase = "follow"
 	if p.Chase {
@@ -994,13 +1020,10 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 		switch p.Phase {
 		case "approach":
 			if distance >= gap-2 && distance <= gap+5 {
-				p.Phase = "greet"
-				p.PhaseUntil = now + 2.4
-				if s.GreetingDuration != nil {
-					p.PhaseUntil = now + math.Max(2.4, math.Max(s.GreetingDuration(p.A), s.GreetingDuration(p.B)))
-				}
-				if s.Supports != nil && (!s.Supports(p.A, "greet") || !s.Supports(p.B, "greet")) {
-					s.beginFollowing(p, a, b, now)
+				if s.MovementEnded != nil && (!s.MovementEnded(p.A) || !s.MovementEnded(p.B)) {
+					p.Phase = "approach_end"
+				} else {
+					s.beginGreeting(p, a, b, now)
 				}
 			} else if now >= p.PhaseUntil {
 				s.Cancel(p.A, now)
@@ -1012,6 +1035,10 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 				intents[p.A] = SocialIntent{"approach", ax, a.Y, true}
 				intents[p.B] = SocialIntent{"approach", bx, b.Y, true}
 				continue
+			}
+		case "approach_end":
+			if s.MovementEnded == nil || (s.MovementEnded(p.A) && s.MovementEnded(p.B)) {
+				s.beginGreeting(p, a, b, now)
 			}
 		case "greet":
 			if now >= p.PhaseUntil {
@@ -1037,6 +1064,9 @@ func (s *SocialCoordinator) Tick(cats []*Cat, blocked []bool, now, dt float64, q
 			}
 		}
 		switch p.Phase {
+		case "approach_end":
+			intents[p.A] = SocialIntent{Action: "social_settle"}
+			intents[p.B] = SocialIntent{Action: "social_settle"}
 		case "greet", "greet_end":
 			intents[p.A] = SocialIntent{Action: p.Phase}
 			intents[p.B] = SocialIntent{Action: p.Phase}

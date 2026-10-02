@@ -253,3 +253,11 @@ not pair through a third cat, hold idle while blocked, and resume follow/chase
 only after a small travel gap opens. Authored stationary entry is preserved,
 including tiny positive movement time at a frame boundary. This prevents rapid
 idle/movement picture swaps without changing animation drawings or duration.
+
+Social arrival and greetings now finish the declared locomotion recovery before
+changing poses; both participants settle before the greeting duration begins.
+Direct interactions and quiet mode still interrupt immediately. Requested pet
+reactions start their visible duration at the first displayed frame rather than
+expiring while a delayed timer has not shown them. Cursor tracking uses radial
+and angular hysteresis to avoid idle/gaze flicker near the face. These changes
+reuse existing artwork and do not add generated in-between drawings.
