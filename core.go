@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-const appVersion = "0.5.3-preview"
+const appVersion = "0.5.4-preview"
 
 var rowFrames = [11]int{6, 8, 8, 4, 5, 8, 6, 6, 5, 8, 8}
 
@@ -259,7 +259,7 @@ type Cat struct {
 	Phase                                        float64
 	W, H                                         int
 	Bounds                                       Rect
-	Dragging                                     bool
+	Pressed, Dragging                            bool
 	Seed                                         *rand.Rand
 }
 
@@ -277,6 +277,10 @@ func (c *Cat) Pet(now float64) {
 func (c *Cat) Tick(now, dt, cursorX, cursorY, idleSeconds float64, quiet bool) (int, int) {
 	if c.Dragging {
 		return 3, 1
+	}
+	if c.Pressed {
+		c.Mode = "idle"
+		return 0, 0
 	}
 	if now < c.PetUntil {
 		return 3, int((now+c.Phase)*5) % 4

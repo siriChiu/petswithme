@@ -35,6 +35,7 @@ func setClickThrough(enabled bool) error {
 		if p.Down {
 			p.Down = false
 			p.Cat.Dragging = false
+			p.Cat.Pressed = false
 			releaseCapture.Call()
 			if app.Engine != nil {
 				app.Engine.Cancel(p.Index, nowSeconds())

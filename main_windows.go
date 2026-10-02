@@ -301,6 +301,13 @@ func reset() {
 	p := currentCursor()
 	r := workArea(0, p)
 	for i, w := range app.Pets {
+		if w.Down {
+			w.Down = false
+			w.DidDrag = false
+			w.Cat.Pressed = false
+			w.Cat.Dragging = false
+			releaseCapture.Call()
+		}
 		if app.Engine != nil {
 			app.Engine.Cancel(i, nowSeconds())
 		}
@@ -329,6 +336,16 @@ func toggleHidden() {
 	resetCPUMonitor()
 	app.Hidden = !app.Hidden
 	for _, p := range app.Pets {
+		if app.Hidden && p.Down {
+			p.Down = false
+			p.DidDrag = false
+			p.Cat.Pressed = false
+			p.Cat.Dragging = false
+			releaseCapture.Call()
+			if app.Engine != nil {
+				app.Engine.Cancel(p.Index, nowSeconds())
+			}
+		}
 		v := uintptr(0)
 		if !app.Hidden {
 			v = 4
@@ -604,7 +621,8 @@ func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		case 0x0201:
 			q := currentCursor()
 			p.Down = true
-			p.Cat.Dragging = true
+			p.Cat.Pressed = true
+			p.Cat.Dragging = false
 			if app.Engine != nil {
 				app.Engine.Cancel(p.Index, nowSeconds())
 			}
@@ -627,12 +645,14 @@ func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		case 0x001F:
 			p.Down = false
 			p.Cat.Dragging = false
+			p.Cat.Pressed = false
 			releaseCapture.Call()
 			setInterval()
 			return 0
 		case 0x0215:
 			p.Down = false
 			p.Cat.Dragging = false
+			p.Cat.Pressed = false
 			setInterval()
 			return 0
 		case 0x0203:
@@ -694,6 +714,7 @@ func finishDrag(p *PetWindow) {
 	dragged := p.DidDrag
 	p.Down = false
 	p.Cat.Dragging = false
+	p.Cat.Pressed = false
 	releaseCapture.Call()
 	updateBounds(p)
 	if app.Engine != nil {

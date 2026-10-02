@@ -542,7 +542,7 @@ func (e *BehaviorEngine) Play(i int, now float64) {
 // Request respects current live priorities. Dragging cannot be interrupted by a
 // click or a menu command. Equal priority restarts deliberate repeated actions.
 func (e *BehaviorEngine) Request(i int, action string, priority BehaviorPriority, now, duration float64) bool {
-	if !e.valid(i) || e.Cats[i].Dragging || !finite(now) || !finite(duration) || duration <= 0 {
+	if !e.valid(i) || e.Cats[i].Dragging || e.Cats[i].Pressed || !finite(now) || !finite(duration) || duration <= 0 {
 		return false
 	}
 	s := e.States[i]
@@ -669,7 +669,7 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		if !busy[i] {
 			e.clearBusyAction(i, now)
 		}
-		blocked[i] = c.Dragging || (s.Priority >= PriorityPlay && (s.OneShot || now < s.Until || s.Ending))
+		blocked[i] = c.Dragging || c.Pressed || (s.Priority >= PriorityPlay && (s.OneShot || now < s.Until || s.Ending))
 	}
 	e.configureSocial()
 	socialBlocked := append([]bool(nil), blocked...)
@@ -690,6 +690,9 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 			action = "drag"
 		case blocked[i]:
 			action = s.Action
+			if c.Pressed && !c.Dragging {
+				action = "idle"
+			}
 		case busy[i]:
 			action = e.tickBusy(i, now, dt)
 		case quiet || idleSeconds >= 180:

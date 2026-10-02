@@ -240,3 +240,8 @@ Private packs can declare a reference width when adding transparent room for a
 horizontal tail. The native size preference and DPI keep the existing body scale;
 window bounds, drag/hit testing and cached rendering use the wider physical
 canvas. Legacy packs retain their previous size arithmetic.
+
+A press freezes autonomous motion immediately, but pickup artwork begins only
+after the pointer crosses the existing drag threshold. Ordinary clicks and
+double-clicks therefore avoid flashing a pickup pose before petting or jumping.
+Capture cancellation, hiding and temporary click-through release pressed state.
