@@ -373,10 +373,14 @@ func (p *AnimationPlayer) Tick(dt float64) (AnimationFrame, bool) {
 			}
 		}
 		duration := float64(max(10, seq[p.Index].DurationMS))
-		if p.ElapsedMS < duration {
+		// Subtracting successive seconds timestamps can leave an exact frame
+		// boundary a few floating-point ulps short. Treat only up to ten-nanosecond
+		// residue as the boundary, so splitting a hold cannot add a whole tick.
+		const boundaryToleranceMS = 1e-5
+		if p.ElapsedMS+boundaryToleranceMS < duration {
 			break
 		}
-		p.ElapsedMS -= duration
+		p.ElapsedMS = math.Max(0, p.ElapsedMS-duration)
 		p.Index++
 		if p.Index < len(seq) {
 			continue
