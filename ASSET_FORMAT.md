@@ -64,7 +64,8 @@ Behavior names: idle, walk_left, walk_right, run_left, run_right, drag, pet, pla
 sleep, sit, getup, rest, pounce, knead,
 greet, social_rest, curious, waiting, groom, stretch, and gaze_0 through gaze_15.
 Each cat has its own animation cursor and interruption generation, even when art
-is shared. Explicit actions finish their end phase; urgent interruptions replace
+is shared. An explicit play/jump command traverses start, one loop, then end;
+it does not repeatedly replay a full takeoff-and-landing loop for a fixed timeout. Explicit actions finish their end phase; urgent interruptions replace
 it immediately. Anchor defaults should normally be bottom-center for feet.
 
 ## Approval pipeline

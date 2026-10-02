@@ -18,7 +18,7 @@ Windows 10/11 x64 is the intended target. No Python, Node, .NET or ChatGPT insta
 account, API key or network connection is required at runtime.
 
 - Click a cat: pet / wave response
-- Double-click: short play / jump sequence
+- Double-click: one complete play / jump sequence, including landing
 - Hold and drag: move; interrupts autonomous behavior
 - Right-click a cat or its notification-area icon: menu
 - Activity: quiet / normal / lively; livelier cats decide and explore more often
@@ -230,3 +230,8 @@ recovery frames remain stationary; arrival and direction changes finish a declar
 recovery before the next motion clip. This removes an extra first-tick slide and
 skipped recovery poses. It does not correct inconsistent paw trajectories in the
 artwork, and reused contact holds are not newly drawn transitions.
+
+Explicit play/jump commands play one complete clip rather than repeating a short
+jump for a fixed five seconds. The recovery is presented before returning to idle;
+delayed timer delivery cannot expire the action before its first visible pose.
+Repeated deliberate commands restart it, and dragging still interrupts at once.

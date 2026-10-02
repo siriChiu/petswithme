@@ -285,6 +285,7 @@ type AnimationPlayer struct {
 	Generation   uint64
 	clip         AnimationClip
 	doneReported bool
+	LoopOnce     bool
 }
 
 func NewAnimationPlayer(m *AnimationManifest) *AnimationPlayer {
@@ -300,6 +301,7 @@ func (p *AnimationPlayer) Play(action, mood string) uint64 {
 	p.ElapsedMS = 0
 	p.Generation++
 	p.doneReported = false
+	p.LoopOnce = false
 	p.Phase = AnimationStart
 	if len(p.clip.Start) == 0 {
 		p.Phase = AnimationLoop
@@ -356,7 +358,7 @@ func (p *AnimationPlayer) Tick(dt float64) (AnimationFrame, bool) {
 			p.Phase = AnimationDone
 			break
 		}
-		if p.Phase == AnimationLoop {
+		if p.Phase == AnimationLoop && !p.LoopOnce {
 			total := 0
 			for _, f := range seq {
 				total += max(10, f.DurationMS)
@@ -376,6 +378,19 @@ func (p *AnimationPlayer) Tick(dt float64) (AnimationFrame, bool) {
 		}
 		p.Index = 0
 		switch p.Phase {
+		case AnimationLoop:
+			if p.LoopOnce {
+				// A single-shot action must reach its recovery instead of
+				// restarting takeoff. Present the first recovery pose before
+				// charging any delayed timer overflow to its duration.
+				p.Phase = AnimationEnd
+				p.ElapsedMS = 0
+				if len(p.clip.End) == 0 {
+					p.Phase = AnimationDone
+				} else {
+					return p.Frame(), false
+				}
+			}
 		case AnimationStart:
 			p.Phase = AnimationLoop
 		case AnimationEnd:
@@ -411,6 +426,7 @@ type BehaviorFrame struct {
 	Generation uint64
 }
 type CatBehavior struct {
+	OneShot                                            bool
 	MotionTurning                                      bool
 	MotionSeconds                                      float64
 	LastPresentedGeneration                            uint64
@@ -465,6 +481,7 @@ func (e *BehaviorEngine) SetManifest(i int, m *AnimationManifest) bool {
 	s := e.States[i]
 	s.Player.Manifest = m
 	s.MotionTurning = false
+	s.OneShot = false
 	s.GazeActive = false
 	s.Player.Play(s.Action, s.Mood)
 	s.Ending = false
@@ -482,6 +499,7 @@ func (e *BehaviorEngine) Cancel(i int, now float64) {
 	s.Priority = PriorityIdle
 	s.GazeActive = false
 	s.MotionTurning = false
+	s.OneShot = false
 	s.Until = 0
 	s.Ending = false
 	s.NextDecision = now + 8
@@ -503,9 +521,18 @@ func (e *BehaviorEngine) Pet(i int, now float64) {
 	e.States[i].Mood = "happy"
 }
 func (e *BehaviorEngine) Play(i int, now float64) {
-	if e.Request(i, "play", PriorityPlay, now, 5) {
-		e.States[i].Mood = "playful"
+	if !e.valid(i) {
+		return
 	}
+	s := e.States[i]
+	oldMood := s.Mood
+	s.Mood = "playful"
+	if !e.Request(i, "play", PriorityPlay, now, actionCycle(s.Player.Manifest, "play", s.Mood)) {
+		s.Mood = oldMood
+		return
+	}
+	s.OneShot = true
+	s.Player.LoopOnce = true
 }
 
 // Request respects current live priorities. Dragging cannot be interrupted by a
@@ -522,7 +549,7 @@ func (e *BehaviorEngine) Request(i int, action string, priority BehaviorPriority
 		e.Cancel(i, now)
 		s.WasDragging = false
 	}
-	if (now < s.Until || s.Ending) && priority < s.Priority {
+	if (s.OneShot || now < s.Until || s.Ending) && priority < s.Priority {
 		return false
 	}
 	e.Social.Cancel(i, now)
@@ -536,6 +563,7 @@ func (e *BehaviorEngine) Request(i int, action string, priority BehaviorPriority
 	s.BusyStretching = false
 	s.BusyStretchEnding = false
 	s.MotionTurning = false
+	s.OneShot = false
 	// A fresh release-click can arrive before the next timer sees Dragging=false.
 	// It replaces the drag instead of being mistaken for stale pre-drag work.
 	s.WasDragging = false
@@ -607,13 +635,14 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 			s.Ending = true
 			s.Player.Stop()
 		}
-		if s.Priority >= PriorityPlay && now >= s.Until && !c.Dragging {
-			if !s.Ending {
+		if s.Priority >= PriorityPlay && ((s.OneShot && s.Player.Phase == AnimationDone) || (!s.OneShot && now >= s.Until)) && !c.Dragging {
+			if !s.Ending && !s.OneShot {
 				s.Player.Stop()
 				s.Ending = true
 			}
 			if s.Player.Phase == AnimationDone {
 				s.Priority = PriorityIdle
+				s.OneShot = false
 				s.Action = "idle"
 				s.Until = 0
 				s.Ending = false
@@ -636,7 +665,7 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		if !busy[i] {
 			e.clearBusyAction(i, now)
 		}
-		blocked[i] = c.Dragging || (s.Priority >= PriorityPlay && (now < s.Until || s.Ending))
+		blocked[i] = c.Dragging || (s.Priority >= PriorityPlay && (s.OneShot || now < s.Until || s.Ending))
 	}
 	e.configureSocial()
 	socialBlocked := append([]bool(nil), blocked...)
@@ -732,6 +761,9 @@ func (e *BehaviorEngine) Tick(now, dt, cursorX, cursorY, idleSeconds float64, qu
 		c.Mode = action
 		if !s.Ending && !finishingSocial && !finishingMotion {
 			s.Player.Set(action, s.Mood)
+			if s.OneShot {
+				s.Player.LoopOnce = true
+			}
 		}
 		frame := s.Player.Frame()
 		s.LastPresentedGeneration = s.Player.Generation
