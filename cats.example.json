@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "cats": [
+    {
+      "name": "Demo cat 1",
+      "sprite": "",
+      "demo": true,
+      "temperament": {
+        "energy": 0.65,
+        "sociability": 0.65,
+        "curiosity": 0.5
+      }
+    },
+    {
+      "name": "Demo cat 2",
+      "sprite": "",
+      "demo": true,
+      "temperament": {
+        "energy": 0.45,
+        "sociability": 0.5,
+        "curiosity": 0.8
+      }
+    },
+    {
+      "name": "Demo cat 3",
+      "sprite": "",
+      "demo": true,
+      "temperament": {
+        "energy": 0.8,
+        "sociability": 0.4,
+        "curiosity": 0.6
+      }
+    }
+  ]
+}

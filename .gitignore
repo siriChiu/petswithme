@@ -1,0 +1,17 @@
+# Private artwork / personal configuration are never published by default.
+assets/*
+!assets/README.md
+cats.json
+*.png
+*.webp
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.zip
+*.exe
+*.test
+/dist/
+/qa/
+/settings.json
+*.tmp
