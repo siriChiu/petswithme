@@ -67,7 +67,7 @@ func measureNativeDeadlines(t *testing.T, adaptive bool, count int) deadlineMeas
 	app.Controller = fixtures[0].probe
 	app.Start = time.Now()
 	app.LastTime = 0
-	app.LastIdleCheck = 0
+	app.LastIdleCheck = 1000 // Keep this isolated fixture in a reproducible active-user state.
 	app.Idle = 0
 	app.Hidden = false
 	app.Quitting = false
@@ -144,6 +144,9 @@ func measureNativeDeadlines(t *testing.T, adaptive bool, count int) deadlineMeas
 					result.TickWallMS += cost
 				}
 				for i, s := range app.Engine.States {
+					if s.Player.Action != "walk_left" {
+						t.Fatal("unexpected timing-fixture action", s.Player.Action)
+					}
 					if s.Player.Index != lastIndex[i] {
 						if lastChange[i] >= warmup {
 							result.HoldsMS = append(result.HoldsMS, (elapsed-lastChange[i])*1000)
